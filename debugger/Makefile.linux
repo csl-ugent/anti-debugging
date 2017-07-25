@@ -1,0 +1,7 @@
+CC = /opt/diablo-gcc-toolchain/bin/arm-diablo-linux-gnueabi-gcc
+CFLAGS := -O3 -fPIC -marm -mfloat-abi=softfp -msoft-float -mfpu=neon -std=gnu11 -Wall -Wextra -Wno-unused $(CFLAGS)
+
+default:
+	$(CC) $(CFLAGS) -o debugger.o -c debugger.c
+clean:
+	-rm -f debugger.o

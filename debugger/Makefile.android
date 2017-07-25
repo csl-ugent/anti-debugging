@@ -1,0 +1,7 @@
+CC = /opt/diablo-android-gcc-toolchain/bin/arm-linux-androideabi-gcc
+CFLAGS := -O3 -fPIC -marm -mfloat-abi=softfp -msoft-float -mfpu=neon -std=gnu99 -Wall -Wextra -Wno-unused $(CFLAGS)
+
+default:
+	$(CC) $(CFLAGS) -o debugger.o -c debugger.c
+clean:
+	-rm -f debugger.o
