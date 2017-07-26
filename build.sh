@@ -5,7 +5,7 @@ set -o nounset
 #set -o xtrace
 
 # Get the directory of the repo and go to it
-repo_dir=$(dirname $(realpath "$0"))
+repo_dir=$(dirname $(readlink -f "$0"))
 echo $repo_dir
 cd $repo_dir
 
