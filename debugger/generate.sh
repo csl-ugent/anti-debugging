@@ -5,7 +5,7 @@ if [ "$#" -ne 2 ]; then
 	exit -1
 fi
 
-OPTIONS="-DLINKIN_AFTER -marm -mfloat-abi=softfp -msoft-float -mfpu=neon -std=gnu99 -Wall -Wextra"
+OPTIONS="-marm -mfloat-abi=softfp -msoft-float -mfpu=neon -std=gnu99 -Wall -Wextra"
 
 exec 1>Makefile
 
