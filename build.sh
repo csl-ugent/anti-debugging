@@ -6,12 +6,11 @@ set -o nounset
 
 # Get the directory of the repo and go to it
 repo_dir=$(dirname $(readlink -f "$0"))
-echo $repo_dir
 cd $repo_dir
 
 # Set up directory structure
 mkdir -p obj-{default,log}/{android,linux}
-ln -s obj-default obj
+ln -nsf ./obj-default obj
 
 # Go to the debugger source
 cd debugger
