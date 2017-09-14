@@ -328,17 +328,13 @@ static void switch_to(uintptr_t id)
   /* Look up the the destination in the map */
   for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_entries; iii++)
   {
-    /* Look up the the destination in the map */
-    for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_entries; iii++)
-    {
-      t_sd_map_entry loop = DIABLO_Debugger_addr_mapping[iii];
+    t_sd_map_entry loop = DIABLO_Debugger_addr_mapping[iii];
 
-      if(loop.key == id)
-      {
-        LOG("Found value: %"PRIxPTR" and mapping sec: %p\n", loop.value, DIABLO_Debugger_addr_mapping);
-        dest = loop.value + (uintptr_t)DIABLO_Debugger_addr_mapping;
-        break;
-      }
+    if(loop.key == id)
+    {
+      LOG("Found value: %"PRIxPTR" and mapping sec: %p\n", loop.value, DIABLO_Debugger_addr_mapping);
+      dest = loop.value + (uintptr_t)DIABLO_Debugger_addr_mapping;
+      break;
     }
   }
 
