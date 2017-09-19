@@ -4,11 +4,14 @@ set -o pipefail
 set -o nounset
 #set -o xtrace
 
-# Get the directory of the repo and go to it
-repo_dir=$(dirname $(readlink -f "$0"))
-cd $repo_dir
+# Get the repo and build directories, go to the build directory
+repo_dir=$(dirname $0)
+build_dir=$1
+mkdir -p $build_dir
+cd $build_dir
 
-# Set up directory structure
+# Set up directory structure in the build directory
+ln -nsf $repo_dir/debugger
 mkdir -p obj-{default,log}/{android,linux}
 ln -nsf ./obj-default obj
 
@@ -19,16 +22,16 @@ cd debugger
 OBJ=debugger.o
 
 make -f Makefile.android
-cp $OBJ $repo_dir/obj-default/android
+mv $OBJ $build_dir/obj-default/android
 
 make -f Makefile.linux
-cp $OBJ $repo_dir/obj-default/linux
+mv $OBJ $build_dir/obj-default/linux
 
 # From now we enable logging
 export CFLAGS=-DENABLE_LOGGING
 
 make -f Makefile.android
-cp $OBJ $repo_dir/obj-log/android
+mv $OBJ $build_dir/obj-log/android
 
 make -f Makefile.linux
-cp $OBJ $repo_dir/obj-log/linux
+mv $OBJ $build_dir/obj-log/linux
