@@ -1,3 +1,4 @@
 The technologies implemented in this code are protected by software patents,
-you are only allowed to use this software non-commercially. Please contact
-Nagravision SA if you want to use these technologies commercially.
+you are only allowed to use this software non-commercially.  Please contact
+Nagravision SA if you want to license patents or if you want to make commercial
+use of the source code.
