@@ -1,4 +1,8 @@
 /* This research is supported by the European Union Seventh Framework Programme (FP7/2007-2013), project ASPIRE (Advanced  Software Protection: Integration, Research, and Exploitation), under grant agreement no. 609734; on-line at https://aspire-fp7.eu/. */
+/* AUTHORS:
+ * Bert Abrath
+ * Joris Wijnant
+ */
 
 #ifndef __DEBUGGER_H__
 #define __DEBUGGER_H__

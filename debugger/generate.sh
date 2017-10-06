@@ -1,4 +1,6 @@
 #!/bin/bash
+# AUTHORS:
+# Bert Abrath
 
 if [ "$#" -ne 2 ]; then
     echo "Illegal number of parameters. Expected a path to a C compiler and a name for the debugger object."
