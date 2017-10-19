@@ -493,7 +493,7 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
 
     case ET_JUMP:
     {
-      if (ARM_INS_REGA(ret_ins) == ARM_REG_R15)
+      if (RegsetCountRegs(ARM_INS_REGS_DEF(ret_ins)) == 1 && RegsetIn(ARM_INS_REGS_DEF(ret_ins), ARM_REG_R15))
       {
         /* If the last instruction sets the PC, it's still the original return instruction and should be replaced */
         InsKill (T_INS(ret_ins));
