@@ -54,6 +54,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
     /* Private helper functions */
     void AppendInstructionsToBackupRegisterContext(t_bbl* bbl, t_regset regset, t_reg state_reg);
     void AppendInstructionsToRestoreRegisterContext(t_bbl* bbl, t_regset regset, t_reg state_reg);
+    void PrepareCfg (t_cfg* cfg);
     void TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins);
     void TransformLdr(t_bbl* bbl, t_arm_ins* orig_ins);
     void TransformStm(t_bbl* bbl, t_arm_ins* orig_ins);

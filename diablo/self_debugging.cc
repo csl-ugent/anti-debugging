@@ -70,31 +70,14 @@ t_bool SelfDebuggingTransformer::CanTransformFunction (t_function* fun) const
   if (FUNCTION_IS_HELL(fun))
     return log_and_return_false("it's a hell function");
 
+  /* If the entry BBL is marked, this means it is reachable from the BBL that resolves invocations of transformed code */
+  if (BblIsMarked2(FUNCTION_BBL_FIRST(fun)))
+    return log_and_return_false("this function plays a part in accessing the transformed code and thus can't be transformed itself");
+
   if (FUNCTION_NAME(fun))
   {
-    t_const_string reason = "this function plays a part in accessing the transformed code and thus can't be transformed itself";
-    t_bbl* exit_bbl = FunctionGetExitBlock(fun);
     t_bbl* entry_bbl = FUNCTION_BBL_FIRST(fun);
     t_cfg_edge* edge;
-
-    /* Don't transform involved in accessing transformed code */
-    if (StringPatternMatch("*" SD_IDENTIFIER_PREFIX "*", FUNCTION_NAME(fun)))
-      return log_and_return_false(reason);
-
-    /* If we factored out any part of this code for accessing transformed code, make sure it isn't transformed either */
-    if (StringPatternMatch("factor-*", FUNCTION_NAME(fun)))
-    {
-      /* We take a look at the incoming edges to ascertain the function isn't called from code that shouldn't be transformed */
-      BBL_FOREACH_PRED_EDGE(entry_bbl, edge)
-      {
-        t_bbl* head = T_BBL(CFG_EDGE_HEAD(edge));
-        t_function* caller = BBL_FUNCTION(head);
-
-        if (FUNCTION_NAME(caller) && StringPatternMatch("*" SD_IDENTIFIER_PREFIX "*", FUNCTION_NAME(caller)))
-          return log_and_return_false(reason);
-      }
-    }
-
     t_regset regs_used_in_fun = RegsetNew();
     t_regset regs_defined_in_fun = RegsetNew();
 
@@ -1376,7 +1359,7 @@ static t_bool sd_split_helper_CanMerge(t_bbl* bbl1, t_bbl* bbl2)
 }
 
 /* Do some preparatory (AD-specific) work on the CFG before doing any transformations */
-static void SelfDebuggingPrepCfg (t_cfg* cfg)
+void SelfDebuggingTransformer::PrepareCfg (t_cfg* cfg)
 {
   /* Check for every BBL whether there is an annotation indicating it shouldn't be transformed. If this is
    * the case, we will remove it from all anti debugging regions it is part of.
@@ -1435,6 +1418,25 @@ static void SelfDebuggingPrepCfg (t_cfg* cfg)
   /* Recompute liveness */
   CfgComputeLiveness (cfg, CONTEXT_SENSITIVE);
   CfgComputeSavedChangedRegisters (cfg);
+
+  /* Prepare for marking */
+  CfgUnmarkAllFun (cfg);
+  t_function* fun;
+  CFG_FOREACH_FUN(cfg, fun)
+  {
+    FunctionUnmarkAllBbls (fun);
+    FunctionUnmark(fun);
+  }
+
+  BblMarkInit2 ();
+  CfgEdgeMarkInit ();
+
+  /* Mark all code that is potentially responsible for executing moved code, we can't move any of this */
+  MarkFrom(cfg, T_BBL(SYMBOL_BASE(init_sym)));
+  MarkFrom(cfg, T_BBL(SYMBOL_BASE(ldr_sym)));
+  MarkFrom(cfg, T_BBL(SYMBOL_BASE(str_sym)));
+  MarkFrom(cfg, T_BBL(SYMBOL_BASE(ldm_sym)));
+  MarkFrom(cfg, T_BBL(SYMBOL_BASE(stm_sym)));
 }
 
 void SelfDebuggingTransformer::TransformObject()
@@ -1449,7 +1451,7 @@ void SelfDebuggingTransformer::TransformObject()
 
   /* Get the CFG and do some preparatory work on it */
   cfg = OBJECT_CFG(obj);
-  SelfDebuggingPrepCfg(cfg);
+  PrepareCfg(cfg);
 
   Region* region;
   SelfDebuggingAnnotationInfo *info;
