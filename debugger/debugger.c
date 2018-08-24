@@ -27,6 +27,11 @@
 /* Own version of tgkill */
 #define my_tgkill(pid, tid, sig) syscall(__NR_tgkill, (pid), (tid), (sig))
 
+/* Hack: this isn't present in the toolchain's ptrace.h unfortunately -_- */
+#ifndef PTRACE_EVENT_STOP
+#define PTRACE_EVENT_STOP 128
+#endif
+
 /* The size of an address */
 static size_t addr_size = sizeof(void*);
 
@@ -250,17 +255,12 @@ static void attachToThreadGroup(pid_t tgid)
       attached = true;
 
       /* Start tracing the thread. If we're not allowed to ptrace, simply exit. */
-      if (ptrace(PTRACE_ATTACH, tid, NULL, NULL))
+      if (ptrace(PTRACE_SEIZE, tid, NULL, (void*) (PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK)))
       {
         ANDROID_LOG("Not allowed to ptrace! PID: %d. TID: %d.", tgid, tid);
         exit(-3);
       }
 
-      /* Wait to get this thread in a stopped state (this is necessary for SETOPTIONS) */
-      waitpid(tid, NULL, __WALL);
-
-      /* Set the options so we get notified of important events */
-      ptrace(PTRACE_SETOPTIONS, tid, NULL, (void*) (PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK));
       ANDROID_LOG("Attached to PID: %d. TID: %d.", tgid, tid);
     }
 
@@ -499,21 +499,48 @@ static void debug_main()
     }
     else if (WIFSTOPPED(status))
     {
-      int signal = WSTOPSIG(status);
-      LOG("Debuggee has been stopped by a signal with number %d.\n", signal);
+      unsigned int signal = WSTOPSIG(status);
+      const unsigned int event = (unsigned int) status >> 16;
+      LOG("Debuggee has been stopped by a signal with number %d and event number %u.\n", signal, event);
+      switch (event)
+      {
+        case PTRACE_EVENT_CLONE:
+          LOG("CLONE EVENT.\n");
+          break;
+        case PTRACE_EVENT_EXEC:
+          LOG("EXEC EVENT.\n");
+          break;
+        case PTRACE_EVENT_EXIT:
+          LOG("EXIT EVENT.\n");
+          break;
+        case PTRACE_EVENT_FORK:
+          LOG("FORK EVENT.\n");
+          break;
+        case PTRACE_EVENT_STOP:
+          LOG("STOP EVENT.\n");
+          break;
+        case PTRACE_EVENT_VFORK:
+          LOG("VFORK EVENT.\n");
+          break;
+      }
 
       switch (signal)
       {
         /* If we receive this signal, the program has exited or the shared object has been unloaded */
         case SIGMINIDEBUGGER:
-          LOG("Debuggee signals to shut down.\n");
+          {
+            LOG("Debuggee signals to shut down.\n");
 
-          /* Detach from the thread group */
-          detachFromThreadGroup(recv_pid);
+            /* Detach from the thread group */
+            detachFromThreadGroup(recv_pid);
 
-          /* Close the debugger */
-          close_debugger();
-          break;
+            /* Close the debugger */
+            close_debugger();
+
+            /* Let the debuggee continue its shutting down, but don't deliver signal */
+            signal = 0;
+            break;
+          }
 
         /* If the signal is a stopping signal, it might actually be a group-stop */
         case SIGSTOP:
@@ -521,70 +548,46 @@ static void debug_main()
         case SIGTTIN:
         case SIGTTOU:
           {
-            siginfo_t siginfo;
-            if (ptrace(PTRACE_GETSIGINFO, recv_pid, 0, &siginfo) == -1)
+            if (event == PTRACE_EVENT_STOP)
             {
-              /* If ptrace fails with EINVAL, it's a group-stop */
-              if (errno == EINVAL)
-              {
-                LOG("Group-stop.\n");
-              }
-            }
-            else
-            {
-              /* Try to add this thread to our collection. It might be a thread we haven't seen before */
-              addThread(recv_pid);
-            }
+              LOG("Group-stop.\n");
 
-            /* Don't ever do anything with a stopping signal */
-            signal = 0;
+              ptrace(PTRACE_LISTEN, recv_pid, NULL, NULL);
+              continue;
+            }
             break;
           }
 
         /* If the signal is SIGTRAP, an event might have happened */
         case SIGTRAP:
           {
-            bool event = true;
-            int event_code = (status >> 8) ^ SIGTRAP;
-            switch (event_code)
+            switch (event)
             {
-              case PTRACE_EVENT_CLONE << 8:
-                LOG("CLONE EVENT.\n");
-                break;
-              case PTRACE_EVENT_EXEC << 8:
+              case PTRACE_EVENT_EXEC:
                 /* If we're dealing with an exec we should simply detach from this PID and continue the debug loop */
-                LOG("EXEC EVENT.\n");
                 ptrace(PTRACE_DETACH, recv_pid, NULL, NULL);
 
                 /* Remove the thread (this might close the debugger if there's no debuggees left) */
                 removeThread(recv_pid);
                 continue;
-              case PTRACE_EVENT_EXIT << 8:
-                LOG("EXIT EVENT.\n");
-                break;
-              case PTRACE_EVENT_FORK << 8:
-                LOG("FORK EVENT.\n");
-                break;
-              case PTRACE_EVENT_VFORK << 8:
-                LOG("VFORK EVENT.\n");
+              case PTRACE_EVENT_CLONE:
+              case PTRACE_EVENT_FORK:
+              case PTRACE_EVENT_VFORK:
+                {
+                  /* If an event happened that resulted in new thread, we should trace it too */
+                  pid_t new_pid;
+                  ptrace(PTRACE_GETEVENTMSG, recv_pid, 0, &new_pid);
+                  ptrace(PTRACE_CONT, new_pid, NULL, NULL);
+                  addThread(new_pid);
+                  break;
+                }
+              case PTRACE_EVENT_EXIT:
+              case PTRACE_EVENT_STOP:
                 break;
               default:
-                event = false;
+                handle_switch(recv_pid);
             }
 
-            if (event)
-            {
-              /* If an event happened that resulted in new thread, we should trace it too */
-              if (event_code != PTRACE_EVENT_EXIT << 8)
-              {
-                pid_t new_pid;
-                ptrace(PTRACE_GETEVENTMSG, recv_pid, 0, &new_pid);
-                ptrace(PTRACE_CONT, new_pid, NULL, NULL);
-                addThread(new_pid);
-              }
-            }
-            else
-              handle_switch(recv_pid);
             signal = 0;/* Don't deliver this signal */
             break;
           }
@@ -641,12 +644,13 @@ void DIABLO_Debugger_Init()
         /* Initialize the debugger and start the debugging loop */
         if (init_debugger(parent_pid))
         {
+          /* Stop the parent */
+          ptrace(PTRACE_INTERRUPT, parent_pid, 0, 0);
+          waitpid(parent_pid, NULL, __WALL);
+
           /* Allow the parent to continue */
           ptrace(PTRACE_POKEDATA, parent_pid, (void*)&can_run, (void*)1);
-
-          /* Have all threads (that are currently stopped) continue again */
-          for(size_t iii = 0; iii < nr_of_threads; iii++)
-            ptrace(PTRACE_CONT, tids[iii], NULL, NULL);
+          ptrace(PTRACE_CONT, parent_pid, 0, 0);
 
           ANDROID_LOG("Start main loop");
           debug_main();

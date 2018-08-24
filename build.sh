@@ -21,17 +21,11 @@ cd debugger
 # Build the objects (android or linux, logging or not) and put them in the right directory
 OBJ=debugger.o
 
-make -f Makefile.android
-mv $OBJ $build_dir/obj-default/android
-
 make -f Makefile.linux
 mv $OBJ $build_dir/obj-default/linux
 
 # From now we enable logging
 export CFLAGS=-DENABLE_LOGGING
-
-make -f Makefile.android
-mv $OBJ $build_dir/obj-log/android
 
 make -f Makefile.linux
 mv $OBJ $build_dir/obj-log/linux
