@@ -641,6 +641,13 @@ void DIABLO_Debugger_Init()
       }
     case 0:/*child process*/
       {
+        /* Move process to a separate process group. This avoids signals sent from the terminal and
+         * meant for the parent ending up at the child. A CTRL-Z on the commandline would stop our
+         * child, which should actually be handling the SIGSTOP arriving for its tracee, instead of
+         * stopping.
+         */
+        setpgid(0, 0);
+
         /* Attach to all thread in the thread group (process) */
         ANDROID_LOG("Mini-debugger has been forked and will start attaching!");
         attachToThreadGroup(parent_pid);
