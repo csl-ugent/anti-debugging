@@ -32,6 +32,10 @@
 #define PTRACE_EVENT_STOP 128
 #endif
 
+#ifndef PTRACE_O_EXITKILL
+#define PTRACE_O_EXITKILL (1 << 20)
+#endif
+
 /* The size of an address */
 static size_t addr_size = sizeof(void*);
 
@@ -255,7 +259,7 @@ static void attachToThreadGroup(pid_t tgid)
       attached = true;
 
       /* Start tracing the thread. If we're not allowed to ptrace, simply exit. */
-      if (ptrace(PTRACE_SEIZE, tid, NULL, (void*) (PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK)))
+      if (ptrace(PTRACE_SEIZE, tid, NULL, (void*) (PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_EXITKILL)))
       {
         ANDROID_LOG("Not allowed to ptrace! PID: %d. TID: %d.", tgid, tid);
         exit(-3);
