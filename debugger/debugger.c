@@ -47,6 +47,8 @@ size_t DIABLO_Debugger_nr_of_entries = 42;
  */
 t_sd_state DIABLO_Debugger_global_state;
 
+static pid_t debugger_pid;
+
 /* These static variables are used when reading memory from the debuggee */
 static uintptr_t sp_debuggee;
 static uintptr_t sp_debugger;
@@ -586,6 +588,8 @@ static void debug_main()
                   break;
                 }
               case PTRACE_EVENT_EXIT:
+                ptrace(PTRACE_DETACH, recv_pid, NULL, NULL);
+                continue;
               case PTRACE_EVENT_STOP:
                 break;
               default:
@@ -619,6 +623,7 @@ static void debug_main()
 /* The finalization routine. Its invocation means the program is ending or the library is being unloaded. */
 static void fini_routine()
 {
+  ptrace(PTRACE_DETACH, debugger_pid, NULL, NULL);
   ANDROID_LOG("Finalization routine. Signaling the mini-debugger to shut down.");
   raise(SIGMINIDEBUGGER);
 }
@@ -630,8 +635,9 @@ void DIABLO_Debugger_Init()
 
   /* Get the parent PID before forking */
   pid_t parent_pid = getpid();
+  pid_t child_pid = fork();
 
-  switch(fork())
+  switch(child_pid)
   {
     case -1:/*error*/
       {
@@ -641,6 +647,16 @@ void DIABLO_Debugger_Init()
       }
     case 0:/*child process*/
       {
+        /* Set up SIGCHLD ignoring. This means some SIGCHLDs won't even be sent (and presented to the tracer through ptrace-stop) anymore. */
+        struct sigaction sa;
+        sa.sa_handler = SIG_IGN; //handle signal by ignoring
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        if (sigaction(SIGCHLD, &sa, 0) == -1) {
+          perror(0);
+          exit(1);
+        }
+
         /* Move process to a separate process group. This avoids signals sent from the terminal and
          * meant for the parent ending up at the child. A CTRL-Z on the commandline would stop our
          * child, which should actually be handling the SIGSTOP arriving for its tracee, instead of
@@ -676,6 +692,10 @@ void DIABLO_Debugger_Init()
 
   /* In the parent, we'll spin on this variable until the child signals we can continue */
   while (!can_run);
+
+  /* Have the parent attach to the mini-debugger */
+  debugger_pid = child_pid;
+  ptrace(PTRACE_SEIZE, debugger_pid, NULL, NULL);
 }
 
 /* For reading we can always use /proc/PID/mem */
