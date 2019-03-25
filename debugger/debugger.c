@@ -255,17 +255,29 @@ static void attachToThreadGroup(pid_t tgid)
 
       pid_t tid = atoi(entry->d_name);
 
-      /* Add this thread to the datastructure. If we already had it, just continue and don't attach */
-      if (!addThread(tid))
+      /* If we already had this thread, just continue and don't attach */
+      if (getThreadIndex(tid) == SIZE_MAX)
         continue;
-      attached = true;
 
       /* Start tracing the thread. If we're not allowed to ptrace, simply exit. */
       if (ptrace(PTRACE_SEIZE, tid, NULL, (void*) (PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_EXITKILL)))
       {
-        ANDROID_LOG("Not allowed to ptrace! PID: %d. TID: %d.", tgid, tid);
+        /* We just read the thread's TID from /proc. If it does not exist anymore, it just died and we'll ignore it. */
+        if (errno == ESRCH)
+          continue;
+        /* We might not have the permissions to attach at all */
+        else if (errno == EPERM)
+          ANDROID_LOG("Not allowed to ptrace! PID: %d. TID: %d.", tgid, tid);
+        /* Unknown other error */
+        else
+          ANDROID_LOG("PTRACE_SEIZE not working! PID: %d. TID: %d.", tgid, tid);
+
         exit(-3);
       }
+
+      /* Add this thread to the datastructure. */
+      addThread(tid);
+      attached = true;
 
       ANDROID_LOG("Attached to PID: %d. TID: %d.", tgid, tid);
     }
