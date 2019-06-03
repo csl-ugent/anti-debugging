@@ -256,7 +256,7 @@ static void attachToThreadGroup(pid_t tgid)
       pid_t tid = atoi(entry->d_name);
 
       /* If we already had this thread, just continue and don't attach */
-      if (getThreadIndex(tid) == SIZE_MAX)
+      if (getThreadIndex(tid) != SIZE_MAX)
         continue;
 
       /* Start tracing the thread. If we're not allowed to ptrace, simply exit. */
