@@ -669,6 +669,16 @@ void DIABLO_Debugger_Init()
           exit(1);
         }
 
+        /* Ignore all possible signals. Can't ever actually ignore SIGSTOP and SIGKILL, but can at least do the rest. Caution: Blocking
+         * synchronously generated SIGBUS, SIGFPE, SIGILL, or SIGSEGV signals is undefined.
+         */
+        sigset_t ss;
+        sigfillset(&ss);
+        if (sigprocmask(SIG_BLOCK, &ss, NULL) == -1) {
+          perror(0);
+          exit(1);
+        }
+
         /* Move process to a separate process group. This avoids signals sent from the terminal and
          * meant for the parent ending up at the child. A CTRL-Z on the commandline would stop our
          * child, which should actually be handling the SIGSTOP arriving for its tracee, instead of
