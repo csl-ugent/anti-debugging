@@ -110,10 +110,10 @@ static bool init_debugger(pid_t target_pid)
   return true;
 }
 
-/* Clean up and exit the debugger */
-static void close_debugger()
+/* Perform finalization of debugger functionality */
+static void fini_debugger()
 {
-  LOG("Closing debugger.\n");
+  LOG("Finalizing debugger functionality.\n");
 
   /* Close the open file descriptors */
   close(mem_file);
@@ -123,6 +123,13 @@ static void close_debugger()
   fclose(stdout);
   fclose(stderr);
 #endif
+}
+
+/* Clean up and exit the debugger */
+static void close_debugger()
+{
+  /* Clean up */
+  fini_debugger();
 
   /* Exit this process */
   exit(0);
