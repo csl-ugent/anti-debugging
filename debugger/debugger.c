@@ -560,7 +560,7 @@ static void debug_main()
               case PTRACE_EVENT_STOP:
                 break;
               default:
-                handle_switch(recv_pid);
+                handle_switch();
             }
 
             signal = 0;/* Don't deliver this signal */
