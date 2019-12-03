@@ -56,9 +56,6 @@ t_sd_state DIABLO_Debugger_global_state;
 static pid_t debugger_pid;
 
 /* These static variables are used when reading memory from the debuggee */
-static uintptr_t sp_debuggee;
-static uintptr_t sp_debugger;
-static ptrdiff_t sp_offset;
 static int mem_file;
 static int mem_file_own;
 
@@ -88,10 +85,6 @@ static bool init_debugger(pid_t target_pid)
 
   LOG("Initialize debugger. Number of entries: %zu\n", DIABLO_Debugger_nr_of_entries);
   LOG("Address of the mapping: %p\n", DIABLO_Debugger_addr_mapping);
-
-  /* Map memory that will serve as a stack when executing application code */
-  sp_debugger = (uintptr_t) mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
-  LOG("Debugger stack pointer: %"PRIxPTR"\n", sp_debugger);
 
   /* Use the PID of the debuggee to open its mem_file */
   char str[80];
@@ -187,48 +180,6 @@ static void removeThread(pid_t tid)
   /* If we're not attachd to any threads anymore, close */
   if (nr_of_threads == 0)
    close_debugger();
-}
-
-/* TODO: This entire function should be cleaner */
-static void set_stack_pointer(uintptr_t pointer)
-{
-  sp_debuggee = pointer - (pointer & 0xfff);
-
-  sp_offset = sp_debugger - sp_debuggee;
-
-  LOG("Debuggee stack pointer: %"PRIxPTR"\nOffset: %tx\n", sp_debuggee, sp_offset);
-}
-
-static void load_process_stack(struct pt_regs* regs)
-{
-  char buf[0x1000];
-  size_t count = abs(sp_debuggee - regs->uregs[13] + addr_size);
-
-  lseek(mem_file, regs->uregs[13], SEEK_SET);
-  read(mem_file, buf, count);
-
-  LOG("from <%08lx-%08lx>\n", regs->uregs[13], regs->uregs[11]);
-
-  lseek(mem_file_own, regs->uregs[13]+sp_offset, SEEK_SET);
-  write(mem_file_own, buf, count);
-
-  LOG("to <%08lx-%08lx>\n", regs->uregs[13] + sp_offset, regs->uregs[11] + sp_offset);
-}
-
-static void store_process_stack(struct pt_regs* regs)
-{
-  char buf[0x1000];
-  size_t count = abs(sp_debuggee - regs->uregs[13] + addr_size);
-
-  lseek(mem_file_own, regs->uregs[13]+sp_offset, SEEK_SET);
-  read(mem_file_own, buf, count);
-
-  LOG("from <%08lx-%08lx>\n", regs->uregs[13] + sp_offset, regs->uregs[11] + sp_offset);
-
-  lseek(mem_file, regs->uregs[13], SEEK_SET);
-  write(mem_file, buf, count);
-
-  LOG("to <%08lx-%08lx>\n", regs->uregs[13], regs->uregs[11]);
 }
 
 /* Attach to all thread in the thread group (process) */
@@ -398,21 +349,12 @@ static void handle_switch()
     ptrace(PTRACE_GETREGS, DIABLO_Debugger_global_state.recv_pid, NULL, regs);
 #endif
 
-    set_stack_pointer(regs->uregs[13]);
-    //load_process_stack(&regs);TODO: Re-enable!
-
     /* Get the constant from the stack and adjust the stack pointer to 'pop' it */
     uintptr_t id = ptrace(PTRACE_PEEKTEXT, DIABLO_Debugger_global_state.recv_pid, (void*)(regs->uregs[13]), NULL);
     regs->uregs[13] += addr_size;
 
     /* TODO: The FP-register is not always used as frame pointer, in that case we shouldn't adjust it */
-    //regs->uregs[11] += sp_offset;
-    //regs->uregs[13] += sp_offset;
     switch_to(id);
-    //regs->uregs[13] -= sp_offset;
-    //regs->uregs[11] -= sp_offset;
-
-    //store_process_stack(&regs);TODO: Re-enable!
 
     /* Print out the information returned by the fragment we executed */
     LOG("ret addr: %"PRIxPTR"\n", DIABLO_Debugger_global_state.address);
