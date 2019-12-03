@@ -592,6 +592,11 @@ static void fini_routine()
 {
   ptrace(PTRACE_DETACH, debugger_pid, NULL, NULL);
   ANDROID_LOG("Finalization routine. Signaling the mini-debugger to shut down.");
+
+  /* Cleaning up debugger functionality */
+  fini_debugger();
+
+  /* Let the mini-debugger know it is to stop */
   raise(SIGMINIDEBUGGER);
 }
 
@@ -683,6 +688,7 @@ void DIABLO_Debugger_Init()
   /* Have the parent attach to the mini-debugger */
   debugger_pid = child_pid;
   ptrace(PTRACE_SEIZE, debugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
+  init_debugger(debugger_pid);
 }
 
 /* For reading we can always use /proc/PID/mem */
