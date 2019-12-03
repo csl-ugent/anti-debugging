@@ -675,7 +675,7 @@ void DIABLO_Debugger_Init()
 
   /* Have the parent attach to the mini-debugger */
   debugger_pid = child_pid;
-  ptrace(PTRACE_SEIZE, debugger_pid, NULL, NULL);
+  ptrace(PTRACE_SEIZE, debugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
 }
 
 /* For reading we can always use /proc/PID/mem */
