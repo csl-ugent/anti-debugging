@@ -36,6 +36,12 @@
 #define PTRACE_O_EXITKILL (1 << 20)
 #endif
 
+/* Hack: this isn't present in the toolchain's prctl.h unfortunately -_- */
+#ifndef PR_SET_PTRACER
+#define PR_SET_PTRACER 0x59616d61
+#define PR_SET_PTRACER_ANY ((unsigned long)-1)
+#endif
+
 /* The size of an address */
 static size_t addr_size = sizeof(void*);
 
@@ -645,6 +651,10 @@ void DIABLO_Debugger_Init()
 {
   volatile unsigned long can_run = 0;
 
+  /* Allow everyone to ptrace. After the fork we'll change it to the specific PID of the child. This could be improved
+   * by using some active looping in the child's attaching logic, perhaps? */
+  prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY);
+
   /* Get the parent PID before forking */
   pid_t parent_pid = getpid();
   pid_t child_pid = fork();
@@ -659,6 +669,9 @@ void DIABLO_Debugger_Init()
       }
     case 0:/*child process*/
       {
+        /* Only allow parent to ptrace */
+        prctl(PR_SET_PTRACER, parent_pid);
+
         /* Set up SIGCHLD ignoring. This means some SIGCHLDs won't even be sent (and presented to the tracer through ptrace-stop) anymore. */
         struct sigaction sa;
         sa.sa_handler = SIG_IGN; //handle signal by ignoring
@@ -708,6 +721,9 @@ void DIABLO_Debugger_Init()
         close_debugger();
       }
   }
+
+  /* Only allow child to ptrace */
+  prctl(PR_SET_PTRACER, child_pid);
 
   /* Install the finalization routine to executed when the parent exits */
   atexit(fini_routine);
