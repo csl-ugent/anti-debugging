@@ -126,7 +126,7 @@ static void fini_debugger()
 }
 
 /* Clean up and exit the debugger */
-static void close_debugger()
+static __attribute__((noreturn)) void close_debugger()
 {
   /* Clean up */
   fini_debugger();
@@ -406,7 +406,7 @@ static void handle_switch()
     ptrace(PTRACE_SETREGS, DIABLO_Debugger_global_state.recv_pid, NULL, regs);
 }
 
-static void debug_main()
+static __attribute__((noreturn)) void debug_main()
 {
   /* Infinite loop, handling signals until the debuggee exits */
   while(true)
