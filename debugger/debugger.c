@@ -59,6 +59,42 @@ static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
 static int mem_file;
 static int mem_file_own;
 
+/* For reading we can always use /proc/PID/mem */
+static void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
+{
+  lseek(mem_file, addr, SEEK_SET);
+  read(mem_file, buf, size);
+}
+
+/* For writing /proc/PID/mem doesn't work on all kernels (not on Android 4.3 for example) so we use ptrace */
+static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
+{
+  /* Write to the process word per word, except for non-word-aligned parts at the end */
+  size_t bytes_read = 0;
+  for (; bytes_read + addr_size <= size; addr += addr_size, bytes_read += addr_size)
+  {
+    uintptr_t value;
+    memcpy(&value, buf + bytes_read, addr_size);
+    ptrace(PTRACE_POKEDATA, DIABLO_Debugger_global_state.recv_pid, (void*)addr, (void*)value);
+  }
+
+  /* The remainder is unaligned to the word size. Unfortunately we can only write in words using the ptrace
+   * API and would thus zero out (and thus overwrite) part of the word that should stay the same.
+   */
+  if (size - bytes_read)
+  {
+    /* We start by reading the entire word, which we will partially change */
+    uintptr_t value;
+    read_tracee_mem(&value, addr_size, addr);
+
+    /* Change the requested part of the word */
+    memcpy(&value, buf + bytes_read, size - bytes_read);
+
+    /* Write the adapted word */
+    ptrace(PTRACE_POKEDATA, DIABLO_Debugger_global_state.recv_pid, (void*)addr, (void*)value);
+  }
+}
+
 /* Perform initialization for the debugger */
 static bool init_debugger(pid_t target_pid)
 {
@@ -689,42 +725,7 @@ void DIABLO_Debugger_Init()
   selfdebugger_pid = child_pid;
   ptrace(PTRACE_SEIZE, selfdebugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
   init_debugger(selfdebugger_pid);
-}
 
-/* For reading we can always use /proc/PID/mem */
-static void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
-{
-  lseek(mem_file, addr, SEEK_SET);
-  read(mem_file, buf, size);
-}
-
-/* For writing /proc/PID/mem doesn't work on all kernels (not on Android 4.3 for example) so we use ptrace */
-static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
-{
-  /* Write to the process word per word, except for non-word-aligned parts at the end */
-  size_t bytes_read = 0;
-  for (; bytes_read + addr_size <= size; addr += addr_size, bytes_read += addr_size)
-  {
-    uintptr_t value;
-    memcpy(&value, buf + bytes_read, addr_size);
-    ptrace(PTRACE_POKEDATA, DIABLO_Debugger_global_state.recv_pid, (void*)addr, (void*)value);
-  }
-
-  /* The remainder is unaligned to the word size. Unfortunately we can only write in words using the ptrace
-   * API and would thus zero out (and thus overwrite) part of the word that should stay the same.
-   */
-  if (size - bytes_read)
-  {
-    /* We start by reading the entire word, which we will partially change */
-    uintptr_t value;
-    read_tracee_mem(&value, addr_size, addr);
-
-    /* Change the requested part of the word */
-    memcpy(&value, buf + bytes_read, size - bytes_read);
-
-    /* Write the adapted word */
-    ptrace(PTRACE_POKEDATA, DIABLO_Debugger_global_state.recv_pid, (void*)addr, (void*)value);
-  }
 }
 
 uintptr_t DIABLO_Debugger_Ldr(uintptr_t* base, uintptr_t offset, uint32_t flags)
