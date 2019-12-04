@@ -53,7 +53,7 @@ size_t DIABLO_Debugger_nr_of_entries = 42;
  */
 t_sd_state DIABLO_Debugger_global_state;
 
-static pid_t debugger_pid;
+static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
 
 /* These static variables are used when reading memory from the debuggee */
 static int mem_file;
@@ -590,7 +590,7 @@ static void debug_main()
 /* The finalization routine. Its invocation means the program is ending or the library is being unloaded. */
 static void fini_routine()
 {
-  ptrace(PTRACE_DETACH, debugger_pid, NULL, NULL);
+  ptrace(PTRACE_DETACH, selfdebugger_pid, NULL, NULL);
   ANDROID_LOG("Finalization routine. Signaling the mini-debugger to shut down.");
 
   /* Cleaning up debugger functionality */
@@ -685,10 +685,10 @@ void DIABLO_Debugger_Init()
   /* In the parent, we'll spin on this variable until the child signals we can continue */
   while (!can_run);
 
-  /* Have the parent attach to the mini-debugger */
-  debugger_pid = child_pid;
-  ptrace(PTRACE_SEIZE, debugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
-  init_debugger(debugger_pid);
+  /* Have the parent attach to the self-debugger */
+  selfdebugger_pid = child_pid;
+  ptrace(PTRACE_SEIZE, selfdebugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
+  init_debugger(selfdebugger_pid);
 }
 
 /* For reading we can always use /proc/PID/mem */
