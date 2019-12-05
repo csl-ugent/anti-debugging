@@ -53,8 +53,6 @@ typedef struct t_sd_state{
   uintptr_t link;
   uintptr_t stack_pointer;
   struct pt_regs regs;
-  pid_t process_pid;/* The actual PID of the process */
-  pid_t recv_pid;/* The PID (actually TID) of the thread for whom waitpid returned */
 } t_sd_state;
 
 typedef void fun_moved_from_context();

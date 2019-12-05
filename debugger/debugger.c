@@ -54,6 +54,7 @@ size_t DIABLO_Debugger_nr_of_entries = 42;
 t_sd_state DIABLO_Debugger_global_state;
 
 static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
+static pid_t debuggee_pid;/* The PID of the debuggee process, i.e., the opposite process */
 
 /* These static variables are used when reading memory from the debuggee */
 static int mem_file;
@@ -78,7 +79,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
   {
     uintptr_t value;
     memcpy(&value, buf + bytes_read, addr_size);
-    ptrace(PTRACE_POKEDATA, DIABLO_Debugger_global_state.recv_pid, (void*)addr, (void*)value);
+    ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value);
   }
 
   /* The remainder is unaligned to the word size. Unfortunately we can only write in words using the ptrace
@@ -94,7 +95,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
     memcpy(&value, buf + bytes_read, size - bytes_read);
 
     /* Write the adapted word */
-    ptrace(PTRACE_POKEDATA, DIABLO_Debugger_global_state.recv_pid, (void*)addr, (void*)value);
+    ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value);
   }
 }
 
@@ -102,7 +103,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
 static bool init_debugger(pid_t target_pid)
 {
   pid_t self_pid = getpid();
-  DIABLO_Debugger_global_state.process_pid = target_pid;
+  debuggee_pid = target_pid;
 
 #ifdef ENABLE_LOGGING
   /* Write stdout and stderr for the debugger to a file */
@@ -305,8 +306,8 @@ static void detachFromThreadGroup(pid_t current)
       continue;/* Already stopped */
 
     /* Send a signal to stop the thread and catch it, leave the thread in stopped state before we detach it */
-    LOG("Stopping PID %d, TID %d.\n", DIABLO_Debugger_global_state.process_pid, tids[iii]);
-    my_tgkill(DIABLO_Debugger_global_state.process_pid, tids[iii], SIGSTOP);
+    LOG("Stopping PID %d, TID %d.\n", debuggee_pid, tids[iii]);
+    my_tgkill(debuggee_pid, tids[iii], SIGSTOP);
     waitpid(tids[iii], NULL, __WALL);
   }
 
@@ -320,8 +321,8 @@ static void detachFromThreadGroup(pid_t current)
     {
       /* Detach from the thread and send two extra SIGCONT's just for good measure */
       ptrace(PTRACE_DETACH, recv, NULL, NULL);
-      my_tgkill(DIABLO_Debugger_global_state.process_pid, recv, SIGCONT);
-      my_tgkill(DIABLO_Debugger_global_state.process_pid, recv, SIGCONT);
+      my_tgkill(debuggee_pid, recv, SIGCONT);
+      my_tgkill(debuggee_pid, recv, SIGCONT);
 
       LOG("During detach received signal from new thread %d. We detached from it.\n", recv);
       continue;
@@ -382,7 +383,7 @@ static void switch_to(uintptr_t id)
   }
 }
 
-static void handle_switch()
+static void handle_switch(pid_t debuggee_tid)
 {
   struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
 
@@ -392,11 +393,11 @@ static void handle_switch()
 
 #ifndef ENABLE_LOGGING
     /* If we're not logging, get the registers now */
-    ptrace(PTRACE_GETREGS, DIABLO_Debugger_global_state.recv_pid, NULL, regs);
+    ptrace(PTRACE_GETREGS, debuggee_tid, NULL, regs);
 #endif
 
     /* Get the constant from the stack and adjust the stack pointer to 'pop' it */
-    uintptr_t id = ptrace(PTRACE_PEEKTEXT, DIABLO_Debugger_global_state.recv_pid, (void*)(regs->uregs[13]), NULL);
+    uintptr_t id = ptrace(PTRACE_PEEKTEXT, debuggee_tid, (void*)(regs->uregs[13]), NULL);
     regs->uregs[13] += addr_size;
 
     /* TODO: The FP-register is not always used as frame pointer, in that case we shouldn't adjust it */
@@ -442,7 +443,7 @@ static void handle_switch()
     LOG("Returning to: %lx\n", regs->uregs[15]);
     LOG("Debugger exited\n");
 
-    ptrace(PTRACE_SETREGS, DIABLO_Debugger_global_state.recv_pid, NULL, regs);
+    ptrace(PTRACE_SETREGS, debuggee_tid, NULL, regs);
 }
 
 static __attribute__((noreturn)) void debug_main()
@@ -454,21 +455,20 @@ static __attribute__((noreturn)) void debug_main()
     struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
 
     /* Wait for a signal from the debuggee. We wait for all PIDs (-1), not sure if the __WALL is required though. */
-    DIABLO_Debugger_global_state.recv_pid = waitpid(-1, &status, __WALL);
-    pid_t recv_pid = DIABLO_Debugger_global_state.recv_pid;
+    pid_t recv_tid = waitpid(-1, &status, __WALL);
 
     /* If waitpid does not succeed, the process is already dead */
-    if (recv_pid == -1)
+    if (recv_tid == -1)
     {
       LOG("The debuggee has terminated (waitpid returns -1)\n");
       close_debugger();
     }
 
-    LOG("Debugger entered for PID: %d\n", recv_pid);
+    LOG("Debugger entered for PID: %d\n", recv_tid);
 
 #ifdef ENABLE_LOGGING
     /* Get the registers. If logging is enabled, we do this now because so we can log them before potentially exiting */
-    ret = ptrace(PTRACE_GETREGS, recv_pid, NULL, regs);
+    ret = ptrace(PTRACE_GETREGS, recv_tid, NULL, regs);
     if (ret == -1)
       LOG("PTRACE_GETREGS failed.\n");
     else
@@ -498,7 +498,7 @@ static __attribute__((noreturn)) void debug_main()
       LOG("Debuggee has terminated normally with exit status %d.\n", WEXITSTATUS(status));
 
       /* Remove the thread (this might close the debugger if there's no debuggees left) */
-      removeThread(recv_pid);
+      removeThread(recv_tid);
       continue;
     }
     else if (WIFSIGNALED(status))
@@ -506,7 +506,7 @@ static __attribute__((noreturn)) void debug_main()
       LOG("Debuggee has been terminated by a signal with number %d.\n", WTERMSIG(status));
 
       /* Remove the thread (this might close the debugger if there's no debuggees left) */
-      removeThread(recv_pid);
+      removeThread(recv_tid);
       continue;
     }
     else if (WIFSTOPPED(status))
@@ -544,7 +544,7 @@ static __attribute__((noreturn)) void debug_main()
             LOG("Debuggee signals to shut down.\n");
 
             /* Detach from the thread group */
-            detachFromThreadGroup(recv_pid);
+            detachFromThreadGroup(recv_tid);
 
             /* Close the debugger */
             close_debugger();
@@ -564,7 +564,7 @@ static __attribute__((noreturn)) void debug_main()
             {
               LOG("Group-stop.\n");
 
-              ptrace(PTRACE_LISTEN, recv_pid, NULL, NULL);
+              ptrace(PTRACE_LISTEN, recv_tid, NULL, NULL);
               continue;
             }
             break;
@@ -577,10 +577,10 @@ static __attribute__((noreturn)) void debug_main()
             {
               case PTRACE_EVENT_EXEC:
                 /* If we're dealing with an exec we should simply detach from this PID and continue the debug loop */
-                ptrace(PTRACE_DETACH, recv_pid, NULL, NULL);
+                ptrace(PTRACE_DETACH, recv_tid, NULL, NULL);
 
                 /* Remove the thread (this might close the debugger if there's no debuggees left) */
-                removeThread(recv_pid);
+                removeThread(recv_tid);
                 continue;
               case PTRACE_EVENT_CLONE:
               case PTRACE_EVENT_FORK:
@@ -588,18 +588,18 @@ static __attribute__((noreturn)) void debug_main()
                 {
                   /* If an event happened that resulted in new thread, we should trace it too */
                   pid_t new_pid;
-                  ptrace(PTRACE_GETEVENTMSG, recv_pid, 0, &new_pid);
+                  ptrace(PTRACE_GETEVENTMSG, recv_tid, 0, &new_pid);
                   ptrace(PTRACE_CONT, new_pid, NULL, NULL);
                   addThread(new_pid);
                   break;
                 }
               case PTRACE_EVENT_EXIT:
-                ptrace(PTRACE_DETACH, recv_pid, NULL, NULL);
+                ptrace(PTRACE_DETACH, recv_tid, NULL, NULL);
                 continue;
               case PTRACE_EVENT_STOP:
                 break;
               default:
-                handle_switch();
+                handle_switch(recv_tid);
             }
 
             signal = 0;/* Don't deliver this signal */
@@ -608,7 +608,7 @@ static __attribute__((noreturn)) void debug_main()
       }
 
       /* Continue the debuggee and - possibly - deliver signal */
-      ptrace(PTRACE_CONT, recv_pid, NULL, (void*) signal);
+      ptrace(PTRACE_CONT, recv_tid, NULL, (void*) signal);
       continue;
     }
 #ifndef __ANDROID__ /* Apparently Android does not support this */
