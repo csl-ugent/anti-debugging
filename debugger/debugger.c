@@ -63,7 +63,10 @@ static int mem_file_own;
 static void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
 {
   lseek(mem_file, addr, SEEK_SET);
-  read(mem_file, buf, size);
+  if (read(mem_file, buf, size) == -1) {
+    perror(0);
+    exit(1);
+  }
 }
 
 /* For writing /proc/PID/mem doesn't work on all kernels (not on Android 4.3 for example) so we use ptrace */
