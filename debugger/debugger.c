@@ -652,6 +652,17 @@ void DIABLO_Debugger_Init()
   pid_t parent_pid = getpid();
   pid_t child_pid = fork();
 
+  /* Set up SIGCHLD ignoring. This means some SIGCHLDs won't even be sent (and presented to the tracer through ptrace-stop) anymore. */
+  // TODO: make this temporary for protected application?
+  struct sigaction sa;
+  sa.sa_handler = SIG_IGN; //handle signal by ignoring
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  if (sigaction(SIGCHLD, &sa, 0) == -1) {
+    perror(0);
+    exit(1);
+  }
+
   switch(child_pid)
   {
     case -1:/*error*/
@@ -664,16 +675,6 @@ void DIABLO_Debugger_Init()
       {
         /* Only allow parent to ptrace */
         prctl(PR_SET_PTRACER, parent_pid);
-
-        /* Set up SIGCHLD ignoring. This means some SIGCHLDs won't even be sent (and presented to the tracer through ptrace-stop) anymore. */
-        struct sigaction sa;
-        sa.sa_handler = SIG_IGN; //handle signal by ignoring
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = 0;
-        if (sigaction(SIGCHLD, &sa, 0) == -1) {
-          perror(0);
-          exit(1);
-        }
 
         /* Ignore all possible signals. Can't ever actually ignore SIGSTOP and SIGKILL, but can at least do the rest. Caution: Blocking
          * synchronously generated SIGBUS, SIGFPE, SIGILL, or SIGSEGV signals is undefined.
