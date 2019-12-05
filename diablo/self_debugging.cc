@@ -13,7 +13,7 @@
 #define PREFIX_FOR_LINKED_IN_SD_OBJECT "LINKED_IN_SD_OBJECT_"
 #define FINAL_PREFIX_FOR_LINKED_IN_SD_OBJECT PREFIX_FOR_LINKED_IN_SD_OBJECT SD_IDENTIFIER_PREFIX
 #define EF_SELF_DEBUGGING_HELL_EDGE (1<<21) /* Flag to signify this edge was created as a result of self-debugging tranformations */
-#define REGS_STRUCT_OFFSET 3 /* The offset of the pt_regs struct in the t_sd_state struct, expressed in address size */
+#define REGS_STRUCT_OFFSET 2 /* The offset of the pt_regs struct in the t_sd_state struct, expressed in address size */
 #define FL_B FL_SPSR/* Cheat by using the FL_SPSR flag to store whether a we only load/store a byte */
 
 using namespace std;
@@ -214,9 +214,7 @@ void SelfDebuggingTransformer::TransformEntrypoint(t_function* fun)
       CfgEdgeChangeTail(edge, old_entry);
 
   /* We will generate the following code for the new entrypoint:
-   * PUSH {FP, LR}
    * ADR state_reg, global_state (load the global state)
-   * STR SP, [state_reg + 2 * adr_size] (store the stack pointer in the state struct)
    * RESTORE REGISTER CONTEXT (this comes down to loading all registers live before entry from the regs struct)
    * [OPTIONAL] LDR state_reg, [state_reg + (REGS_STRUCT_OFFSET + state_reg#) * adr_size]
    */
@@ -240,8 +238,6 @@ void SelfDebuggingTransformer::TransformEntrypoint(t_function* fun)
     REGSET_FOREACH_REG(available, state_reg)
       break;
 
-  ArmMakeInsForBbl(Push, Append, arm_ins, entry, isThumb, (1 << ARM_REG_R11) | (1 << ARM_REG_R14), ARM_CONDITION_AL, isThumb);
-
   /* Produce the address of the state struct */
   ArmMakeInsForBbl(Mov, Append, arm_ins, entry, isThumb, state_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL);
   t_reloc* reloc = RelocTableAddRelocToRelocatable(
@@ -257,9 +253,6 @@ void SelfDebuggingTransformer::TransformEntrypoint(t_function* fun)
       NULL, /* sec */
       "R00A00+" "\\" WRITE_32);
   ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
-
-  /* Put the debugger's stack pointer in the state struct, before we overwrite it */
-  ArmMakeInsForBbl(Str, Append, arm_ins, entry, isThumb, ARM_REG_R13, state_reg, ARM_REG_NONE, 2 * adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
 
   /* Append the instructions needed to restore the register context */
   DEBUG(("live before: @X",CPREGSET(FUNCTION_CFG(fun),live_before)));
@@ -375,8 +368,7 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
    * [OPTIONAL] STR helper2, [state_reg + adr_size] (put the link address into the t_sd_state struct)
    * [OPTIONAL] POP helper1 (in case there are no dead registers, we also need to store the pushed value of state_reg in the pt_regs struct)
    * [OPTIONAL] STR helper1, [state_reg + (REGS_STRUCT_OFFSET + state_reg) * adr_size]
-   * LDR SP, [state_reg + 2 * adr_size] (reload the original stack pointer)
-   * POP {FP, PC}
+   * BKPT 0x0000
    */
   t_bool isThumb = ArmBblIsThumb(bbl);
   t_arm_ins* arm_ins, *dest_ins, *link_ins;
@@ -516,11 +508,8 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
     ArmMakeInsForBbl(Str, Append, arm_ins, bbl, isThumb, helper1, state_reg, ARM_REG_NONE, (REGS_STRUCT_OFFSET + state_reg) * adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
   }
 
-  /* Restore the debugger's stack pointer */
-  ArmMakeInsForBbl(Ldr, Append, arm_ins, bbl, isThumb, ARM_REG_R13, state_reg, ARM_REG_NONE, 2 * adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-
-  /* Insert instruction to exit back to the debugger that called this fragment */
-  ArmMakeInsForBbl(Pop, Append, arm_ins, bbl, isThumb, (1 << ARM_REG_R11) | (1 << ARM_REG_R15), ARM_CONDITION_AL, isThumb);
+  /* Create the breakpoint to exit back to the protected application */
+  ArmMakeInsForBbl(Bkpt, Append, arm_ins, bbl, isThumb);
 }
 
 void SelfDebuggingTransformer::AppendInstructionsToRestoreRegisterContext(t_bbl* bbl, t_regset regset, t_reg state_reg)

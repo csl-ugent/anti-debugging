@@ -10,7 +10,6 @@
 /* C standard headers */
 #include <errno.h>
 #include <inttypes.h>
-#include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -26,6 +25,7 @@
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 /* Architecture-specific headers */
@@ -51,11 +51,8 @@ typedef struct t_sd_map_entry{
 typedef struct t_sd_state{
   uintptr_t address;
   uintptr_t link;
-  uintptr_t stack_pointer;
   struct pt_regs regs;
 } t_sd_state;
-
-typedef void fun_moved_from_context();
 
 /* The functions that will be used by Diablo */
 #ifdef LINKIN_AFTER

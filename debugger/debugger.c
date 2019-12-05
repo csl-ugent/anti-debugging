@@ -55,6 +55,8 @@ t_sd_state DIABLO_Debugger_global_state;
 
 static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
 static pid_t debuggee_pid;/* The PID of the debuggee process, i.e., the opposite process */
+static char debug_stack[16384];
+static ucontext_t debug_loop_context;
 
 /* These static variables are used when reading memory from the debuggee */
 static int mem_file;
@@ -346,11 +348,17 @@ static void detachFromThreadGroup(pid_t current)
   ptrace(PTRACE_DETACH, current, NULL, NULL);
 }
 
-static void switch_to(uintptr_t id)
+static __attribute__((noreturn)) void return_to_debug_main()
 {
-  /* We assume pointers with value 0 to be invalid, so we can use this as a guard value. Using volatile for clobbered warning -_- */
-  volatile uintptr_t dest = 0;
+  setcontext(&debug_loop_context);
 
+  /* Should never get here, unless setcontext failed */
+  LOG("The function setcontext failed!\n");
+  close_debugger();
+}
+
+static uintptr_t get_destination(uintptr_t id)
+{
   /* Look up the the destination in the map */
   for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_entries; iii++)
   {
@@ -359,38 +367,47 @@ static void switch_to(uintptr_t id)
     if(loop.key == id)
     {
       LOG("Found value: %"PRIxPTR" and mapping sec: %p\n", loop.value, DIABLO_Debugger_addr_mapping);
-      dest = loop.value + (uintptr_t)DIABLO_Debugger_addr_mapping;
-      break;
+      return loop.value + (uintptr_t)DIABLO_Debugger_addr_mapping;
     }
   }
 
-  if(dest != 0)
-  {
-    LOG("Found the destination: %"PRIxPTR"\n", dest);
-
-    /* We're using a setjmp/longjmp to save/restore all callee-saved registers */
-    jmp_buf env;
-    if(setjmp(env))
-      return;
-
-    ((fun_moved_from_context*) dest)();/* Invoke the destination */
-    longjmp(env, 0);
-  }
-  else
-  {
-    LOG("Unknown address: application will be forced to shut down!\n");
-    close_debugger();
-  }
+  /* Haven't found a destination? That's bad! */
+  LOG("Unknown address: application will be forced to shut down!\n");
+  close_debugger();
 }
 
-static void handle_switch(pid_t debuggee_tid)
+/* Do the switch to the new context, by switching to these registers */
+static __attribute__((noreturn, naked)) void do_switch(struct pt_regs* regs)
+{
+  __asm volatile (
+      "MOV SP, %[input_regs]\n\t" /* First move the registers to SP, as we get a Diablo FATAL when doing the LDM from R0 */
+      "LDM SP, {R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, FP, IP, SP, LR, PC}\n\t"
+      : /* No output operands */
+      : [input_regs] "r" (regs)
+      );
+}
+
+static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid)
 {
   struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
 
-  /* Zero out these fields that might get filled in by the fragment */
-  DIABLO_Debugger_global_state.link = 0;
-  DIABLO_Debugger_global_state.address = 0;
+  /* Differentiate between handling switch as protected application, and as self-debugger */
+  if (selfdebugger_pid)
+  {
+    /* If we're the protected application, just steal the global state (including registers and addresses)
+     * from the self-debugger.
+     */
+    read_tracee_mem(&DIABLO_Debugger_global_state, sizeof(DIABLO_Debugger_global_state), (uintptr_t)&DIABLO_Debugger_global_state);
 
+    /* Print out the information returned by the fragment we executed */
+    LOG("ret addr: %"PRIxPTR"\n", DIABLO_Debugger_global_state.address);
+    LOG("ret link: %"PRIxPTR"\n", DIABLO_Debugger_global_state.link);
+  }
+  else
+  {
+    /* If we're the self-debugger, get the protected application's registers, and determine the address of the code
+     * fragment that was requested.
+     */
 #ifndef ENABLE_LOGGING
     /* If we're not logging, get the registers now */
     ptrace(PTRACE_GETREGS, debuggee_tid, NULL, regs);
@@ -400,62 +417,56 @@ static void handle_switch(pid_t debuggee_tid)
     uintptr_t id = ptrace(PTRACE_PEEKTEXT, debuggee_tid, (void*)(regs->uregs[13]), NULL);
     regs->uregs[13] += addr_size;
 
-    /* TODO: The FP-register is not always used as frame pointer, in that case we shouldn't adjust it */
-    switch_to(id);
+    /* There's no link address, but fill in the address of the destination code fragment */
+    DIABLO_Debugger_global_state.link = 0;
+    DIABLO_Debugger_global_state.address = get_destination(id);
+  }
 
-    /* Print out the information returned by the fragment we executed */
-    LOG("ret addr: %"PRIxPTR"\n", DIABLO_Debugger_global_state.address);
-    LOG("ret link: %"PRIxPTR"\n", DIABLO_Debugger_global_state.link);
+  /* Prepare the debuggee to be continued at the debug loop, then actually let it continue */
+  struct pt_regs new_regs;
+  ptrace(PTRACE_GETREGS, debuggee_tid, NULL, &new_regs);
+  new_regs.uregs[15] = (uintptr_t)&return_to_debug_main;
+  ptrace(PTRACE_SETREGS, debuggee_tid, NULL, &new_regs);
+  ptrace(PTRACE_CONT, debuggee_tid, NULL, NULL);
 
-    /* If a call occurred, update the link register */
-    if(DIABLO_Debugger_global_state.link)
-      regs->uregs[14] = DIABLO_Debugger_global_state.link;
+  /* If a call occurred, update the link register */
+  if (DIABLO_Debugger_global_state.link)
+    regs->uregs[14] = DIABLO_Debugger_global_state.link;
 
-    /* If we have a destination address, use it. Else just go to the next instruction */
-    switch(DIABLO_Debugger_global_state.address)
-    {
-      case 0:
-        regs->uregs[15] += addr_size;
-        break;
-      case 1:
-        regs->uregs[15] = regs->uregs[14];
-        break;
-      default:
-        regs->uregs[15] = DIABLO_Debugger_global_state.address;
-    }
+  /* If we have a destination address, use it. Else just go to the next instruction */
+  switch(DIABLO_Debugger_global_state.address)
+  {
+    case 0:
+      regs->uregs[15] += addr_size;
+      break;
+    case 1:
+      regs->uregs[15] = regs->uregs[14];
+      break;
+    default:
+      regs->uregs[15] = DIABLO_Debugger_global_state.address;
+  }
 
-    /* Put new register values in place and continue the debuggee */
-    LOG("Register R0: %lx\n", regs->uregs[0]);
-    LOG("Register R1: %lx\n", regs->uregs[1]);
-    LOG("Register R2: %lx\n", regs->uregs[2]);
-    LOG("Register R3: %lx\n", regs->uregs[3]);
-    LOG("Register R4: %lx\n", regs->uregs[4]);
-    LOG("Register R5: %lx\n", regs->uregs[5]);
-    LOG("Register R6: %lx\n", regs->uregs[6]);
-    LOG("Register R7: %lx\n", regs->uregs[7]);
-    LOG("Register R8: %lx\n", regs->uregs[8]);
-    LOG("Register R9: %lx\n", regs->uregs[9]);
-    LOG("Register R10: %lx\n", regs->uregs[10]);
-    LOG("Frame pointer: %lx\n", regs->uregs[11]);
-    LOG("IP link: %lx\n", regs->uregs[12]);
-    LOG("Stack pointer: %lx\n", regs->uregs[13]);
-    LOG("Link register: %lx\n", regs->uregs[14]);
-    LOG("Returning to: %lx\n", regs->uregs[15]);
-    LOG("Debugger exited\n");
+  /* Reset these fields, as they might get filled in by a code fragment */
+  DIABLO_Debugger_global_state.link = 0;
+  DIABLO_Debugger_global_state.address = 0;
 
-    ptrace(PTRACE_SETREGS, debuggee_tid, NULL, regs);
+  /* Do actual context switch */
+  do_switch(&DIABLO_Debugger_global_state.regs);
 }
 
 static __attribute__((noreturn)) void debug_main()
 {
+  LOG("Debug loop entered\n");
+
   /* Infinite loop, handling signals until the debuggee exits */
   while(true)
   {
     int status, ret;
-    struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
 
-    /* Wait for a signal from the debuggee. We wait for all PIDs (-1), not sure if the __WALL is required though. */
-    pid_t recv_tid = waitpid(-1, &status, __WALL);
+    /* Wait for a signal from the debuggee. This is either the self-debugger, in which case we explicitly use its PID, or any of the
+     * application's threads, in which case we wait for all PIDs (-1). Not sure if the __WALL is required though.
+     */
+    pid_t recv_tid = waitpid(selfdebugger_pid ? selfdebugger_pid : -1, &status, __WALL);
 
     /* If waitpid does not succeed, the process is already dead */
     if (recv_tid == -1)
@@ -467,6 +478,7 @@ static __attribute__((noreturn)) void debug_main()
     LOG("Debugger entered for PID: %d\n", recv_tid);
 
 #ifdef ENABLE_LOGGING
+    struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
     /* Get the registers. If logging is enabled, we do this now because so we can log them before potentially exiting */
     ret = ptrace(PTRACE_GETREGS, recv_tid, NULL, regs);
     if (ret == -1)
@@ -708,7 +720,9 @@ void DIABLO_Debugger_Init()
           ptrace(PTRACE_POKEDATA, parent_pid, (void*)&can_run, (void*)1);
           ptrace(PTRACE_CONT, parent_pid, 0, 0);
 
+          /* Right before we go into the debug loop, set the context to return to */
           ANDROID_LOG("Start main loop");
+          getcontext(&debug_loop_context);
           debug_main();
         }
 
@@ -730,6 +744,12 @@ void DIABLO_Debugger_Init()
   ptrace(PTRACE_SEIZE, selfdebugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
   init_debugger(selfdebugger_pid);
 
+  /* Create the context for the debug loop */
+  getcontext(&debug_loop_context);
+  debug_loop_context.uc_stack.ss_sp = debug_stack;
+  debug_loop_context.uc_stack.ss_size = sizeof(debug_stack);
+  debug_loop_context.uc_link = NULL;
+  makecontext(&debug_loop_context, &debug_main, 0);
 }
 
 uintptr_t DIABLO_Debugger_Ldr(uintptr_t* base, uintptr_t offset, uint32_t flags)
