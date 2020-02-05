@@ -1,6 +1,7 @@
 /* This research is supported by the European Union Seventh Framework Programme (FP7/2007-2013), project ASPIRE (Advanced  Software Protection: Integration, Research, and Exploitation), under grant agreement no. 609734; on-line at https://aspire-fp7.eu/. */
 /* AUTHORS:
  * Bert Abrath
+ * Ilja Nevolin
  * Joris Wijnant
  */
 
@@ -23,6 +24,7 @@ extern "C" {
 
 #include <abstract_transformer.h>
 
+class Obfus;
 class SelfDebuggingTransformer : public AbstractTransformer
 {
   protected:
@@ -48,6 +50,9 @@ class SelfDebuggingTransformer : public AbstractTransformer
     /* The constants used by the map as key */
     t_uint32 constant;
     std::vector<t_uint32> constants;
+
+    /* The obfuscator instance */
+    Obfus* obfus;
 
     /*** FUNCTIONS ***/
   private:

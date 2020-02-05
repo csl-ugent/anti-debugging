@@ -3,10 +3,12 @@
  * Bert Abrath
  * Bart Coppens
  * Bjorn De Sutter
+ * Ilja Nevolin
  * Joris Wijnant
  */
 
 #include "self_debugging.h"
+#include "self_debugging_obfuscations.h"
 
 #define SELFDEBUGGING_PREFIX "Debugger_"
 #define SD_IDENTIFIER_PREFIX LINKIN_IDENTIFIER_PREFIX SELFDEBUGGING_PREFIX
@@ -47,6 +49,11 @@ SelfDebuggingTransformer::SelfDebuggingTransformer (t_object* obj, t_const_strin
     DiabloBrokerCall ("AddInitializationRoutine", obj, init_sym);
 
   LOG(L_TRANSFORMS, "START OF ANTI-DEBUGGING LOG\n");
+
+  srand(time(NULL)); // for rand() function
+
+  // <<<< choose your weapon >>>> ::
+  obfus = new Obfus_m_bkpt_1(); // "true" for large applications ; "false" for small ones.
 }
 
 SelfDebuggingTransformer::~SelfDebuggingTransformer ()
@@ -272,83 +279,18 @@ void SelfDebuggingTransformer::TransformExit (t_cfg_edge* edge)
 
 void SelfDebuggingTransformer::TransformIncomingEdgeImpl (t_bbl* bbl, t_cfg_edge* edge)
 {
-  /* We will append the following code:
-   * [OPTIONAL] PUSH {R0, R1} (if there are no dead regs)
-   * CONST const_reg, $constant
-   * There are two options in which to get the constant on stack:
-   * 1.: PUSH const_reg
-   * 2.: STR const_reg [SP + 4] (no dead regs, R0 is const_reg)
-   *     POP const_reg
-   * [OPTIONAL] ADR LR, return_bbl (if we're dealing with a call edge)
-   * BKPT 0x0000
-   */
+  //////////////////////////////////////
+  /////// obfus method selection ///////
+  //////////////////////////////////////
+  obfus->start(obj, cfg, possible, bbl, edge, transformed_hell_edge_flag, adr_size, constant);
   t_arm_ins* arm_ins;
+  //inserting Noop's here results in error for m_segv_7 (and maybe other as well)!!
+  //ArmMakeInsForBbl(Noop, Prepend, arm_ins, bbl, ArmBblIsThumb(bbl)); // add Nop to make searching in asm easier !!! remove in production !!!
+  //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, ArmBblIsThumb(bbl)); // add Nop to make searching in asm easier !!! remove in production !!!
+  //////////////////////////////////////
+  //////////////////////////////////////
+  //////////////////////////////////////
 
-  /* Find out how many registers there are available */
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
-  t_uint32 nr_of_dead_regs = RegsetCountRegs(available);
-
-  /* Find a dead register to produce the constant in. If we don't find one, push and pop a live reg */
-  t_bool isThumb = ArmBblIsThumb(bbl);
-  t_reg const_reg;
-  if (nr_of_dead_regs == 0)
-  {
-    const_reg = ARM_REG_R0;
-    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << const_reg) | (1 << ARM_REG_R1), ARM_CONDITION_AL, isThumb);
-  }
-  else
-    REGSET_FOREACH_REG(available, const_reg)
-      break;
-
-  /* Create the constant */
-  ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, const_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-  ArmMakeConstantProducer(arm_ins, constant);
-
-  /* We will place the constant on the top of the stack. The exact way in which we do this depends on whether
-   * we can use a dead register or not. If we do we simply push the register containing the constant. If we
-   * don't we still have to pop the saved contents of the live register we used to create the constant, and
-   * thus we have to be a little creative. We will store the constant in the slot beneath the stack pointer
-   * (of which we are certain it contains nothing), and then pop the first stack slot into the used register.
-   */
-  if (nr_of_dead_regs == 0)
-  {
-    ArmMakeInsForBbl(Str, Append, arm_ins, bbl, isThumb, const_reg, ARM_REG_R13, ARM_REG_NONE, adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-    ArmMakeInsForBbl(Pop, Append, arm_ins, bbl, isThumb, 1 << const_reg, ARM_CONDITION_AL, isThumb);
-  }
-  else
-    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << const_reg), ARM_CONDITION_AL, isThumb);
-
-  /* If we're dealing with a call edge, emulate the call by moving the return address to LR */
-  if (CfgEdgeTestCategoryOr(edge, ET_CALL))
-  {
-    ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R14, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-    t_bbl* bbl_successor = CFG_EDGE_TAIL(CFG_EDGE_CORR(edge));
-    t_reloc* reloc = RelocTableAddRelocToRelocatable(
-       OBJECT_RELOC_TABLE(obj),
-       AddressNullForObject(obj), /* addend */
-       T_RELOCATABLE(arm_ins), /* from */
-       AddressNullForObject(obj),  /* from-offset */
-       T_RELOCATABLE(bbl_successor), /* to */
-       AddressNullForObject(obj), /* to-offset */
-       FALSE, /* hell */
-       NULL, /* edge*/
-       NULL, /* corresp */
-       NULL, /* sec */
-       "R00A00+" "\\" WRITE_32);
-    ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
-  }
-
-  /* Create the breakpoint to switch to the debugger */
-  ArmMakeInsForBbl(Bkpt, Append, arm_ins, bbl, isThumb);
-
-  t_regset regs_use = ARM_INS_REGS_USE(arm_ins);
-  RegsetSetSubReg(regs_use, ARM_REG_CPSR);
-  ARM_INS_SET_REGS_USE(arm_ins,regs_use);
-
-  /* Adjust the incoming edge to go to hell */
-  CfgEdgeChangeTail(edge, CFG_HELL_NODE(cfg));
-  CFG_EDGE_SET_CAT(edge, ET_IPJUMP);
-  CFG_EDGE_SET_FLAGS(edge, CFG_EDGE_FLAGS(edge) | transformed_hell_edge_flag);
 }
 
 void SelfDebuggingTransformer::TransformIncomingTransformedEdgeImpl (t_arm_ins* ins, t_reloc* reloc)
@@ -1440,6 +1382,11 @@ void SelfDebuggingTransformer::TransformObject()
 
   /* Get the CFG and do some preparatory work on it */
   cfg = OBJECT_CFG(obj);
+
+  ////////////////////////////////////////
+  obfus->prepareCFG(cfg);
+  ////////////////////////////////////////
+
   PrepareCfg(cfg);
 
   Region* region;
@@ -1471,20 +1418,17 @@ void SelfDebuggingTransformer::TransformObject()
         /* Set the value in the map: we're using the offset of the function's entrypoint to a known position in
          * the binary. As known position we're using the map itself.
          */
-        RelocTableAddRelocToRelocatable(OBJECT_RELOC_TABLE(obj),
-            AddressNullForObject(obj), /* addend */
-            T_RELOCATABLE(map_sec), /* from */
-            AddressNewForObject(obj, offset), /* from-offset */
-            T_RELOCATABLE(FUNCTION_BBL_FIRST(fun)), /* to */
-            AddressNullForObject(obj), /* to-offset */
-            FALSE, /* hell */
-            NULL, /* edge */
-            NULL, /* corresp */
-            T_RELOCATABLE(map_sec), /* sec */
-            "R00R01-" "\\" WRITE_32);
+        // the map will contain relative distance from map_sec to the address of the moved function.
+
+        //////////////////////////////////////////////////////
+        obfus->generate_addr_mapping(obj, fun, offset, map_sec);
+        obfus->obfus_encode_illegal_address_as_offset(obj, cfg, possible, fun);
+        //////////////////////////////////////////////////////
+
       }
     }
   }
+  //todo: we only need to use the mapping table for OBFUS_METHOD 0(original) and 1.
 
   /* Set all the variables in the linked in object */
   SectionSetData32 (T_SECTION(SYMBOL_BASE(nr_of_entries_sym)), SYMBOL_OFFSET_FROM_START(nr_of_entries_sym), transform_index);
@@ -1499,6 +1443,13 @@ void SelfDebuggingTransformer::TransformObject()
     t_uint32 offset = iii * map_entry_size;
     SectionSetData32 (map_sec, AddressNewForObject(obj, offset), constants[iii]);
   }
+
+
+  ////////////////////////////////////////
+  obfus->postProcess(cfg);
+  ////////////////////////////////////////
+
+
 
   STATUS(STOP, ("Anti Debugging"));
 }
