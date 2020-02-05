@@ -391,17 +391,21 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid)
 {
   struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
 
-  /* Differentiate between handling switch as protected application, and as self-debugger */
+  /* Gather information from opposite process. In doing so, differentiate between handling switch as protected application, and as self-debugger */
+  uintptr_t destination_address;
+  uintptr_t link_address;
   if (selfdebugger_pid)
   {
     /* If we're the protected application, just steal the global state (including registers and addresses)
      * from the self-debugger.
      */
     read_tracee_mem(&DIABLO_Debugger_global_state, sizeof(DIABLO_Debugger_global_state), (uintptr_t)&DIABLO_Debugger_global_state);
+    destination_address = DIABLO_Debugger_global_state.address;
+    link_address = DIABLO_Debugger_global_state.link;
 
     /* Print out the information returned by the fragment we executed */
-    LOG("ret addr: %"PRIxPTR"\n", DIABLO_Debugger_global_state.address);
-    LOG("ret link: %"PRIxPTR"\n", DIABLO_Debugger_global_state.link);
+    LOG("ret addr: %"PRIxPTR"\n", destination_address);
+    LOG("ret link: %"PRIxPTR"\n", link_address);
   }
   else
   {
@@ -418,8 +422,8 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid)
     regs->uregs[13] += addr_size;
 
     /* There's no link address, but fill in the address of the destination code fragment */
-    DIABLO_Debugger_global_state.link = 0;
-    DIABLO_Debugger_global_state.address = get_destination(id);
+    destination_address = get_destination(id);
+    link_address = 0;
   }
 
   /* Prepare the debuggee to be continued at the debug loop, then actually let it continue */
@@ -430,11 +434,11 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid)
   ptrace(PTRACE_CONT, debuggee_tid, NULL, NULL);
 
   /* If a call occurred, update the link register */
-  if (DIABLO_Debugger_global_state.link)
-    regs->uregs[14] = DIABLO_Debugger_global_state.link;
+  if (link_address)
+    regs->uregs[14] = link_address;
 
   /* If we have a destination address, use it. Else just go to the next instruction */
-  switch(DIABLO_Debugger_global_state.address)
+  switch(destination_address)
   {
     case 0:
       regs->uregs[15] += addr_size;
@@ -443,7 +447,7 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid)
       regs->uregs[15] = regs->uregs[14];
       break;
     default:
-      regs->uregs[15] = DIABLO_Debugger_global_state.address;
+      regs->uregs[15] = destination_address;
   }
 
   /* Reset these fields, as they might get filled in by a code fragment */
