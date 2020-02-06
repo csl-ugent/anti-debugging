@@ -46,12 +46,7 @@
 ///////////////////////////////////////////////////////
 //////////////////// OBFUSCATION //////////////////////
 ///////////////////////////////////////////////////////
-static const enum obfus_method {
-  BKPT, FPE_1, FPE_2, SEGV_1, SEGV_2, SEGV_3, SEGV_4, SEGV_5, SEGV_6, SEGV_7, SEGV_8, SEGV_9, SEGV_10
-} OBFUS_METHOD = SEGV_10;   //change this according to the chosen 'obfus' class in self_debugging.cc
-
-///// extra obfuscation strategies /////
-//change this according to the values in self_debugging.cc  (class: Obfus_extras)
+static const bool ADDRESS_OBFUSCATION = true;
 static const bool IS_MUTILATED_ADDR_MAPPING = true;
 static const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
 
@@ -591,29 +586,32 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
   return dest;
 }
 
-static uintptr_t get_destination(struct pt_regs* regs, unsigned int signal)
+static uintptr_t get_destination(pid_t debuggee_tid, unsigned int signal, struct pt_regs* regs,  bool is_selfdebugger)
 {
-  switch(OBFUS_METHOD) {
-    case BKPT:
-    case FPE_1:
-    case SEGV_1:
-      return decode_unobfuscated_address(regs);
-    case FPE_2:
-      return decode_obfuscated_address1(regs);
-    case SEGV_2:
-    case SEGV_3:
-      //case SEGV_4: // DEPRECATED
-      //case SEGV_5: // DEPRECATED
-    case SEGV_6:
-    case SEGV_7:
-    case SEGV_8:
-    case SEGV_9:
-    case SEGV_10:
-      return decode_obfuscated_address2(regs);
-    default:
-      LOG("Unspecified obfuscation method: application will be forced to shut down!\n");
-      close_debugger();
+  switch (signal)
+  {
+    case SIGTRAP:
+        return decode_unobfuscated_address(regs);
+    case SIGFPE:
+      {
+        if (ADDRESS_OBFUSCATION)
+          return decode_obfuscated_address1(regs);
+        else
+          return decode_unobfuscated_address(regs);
+      }
+    case SIGBUS:
+    case SIGILL:
+    case SIGSEGV:
+      {
+        if (ADDRESS_OBFUSCATION)
+          return decode_obfuscated_address2(regs);
+        else
+          return decode_unobfuscated_address(regs);
+      }
   }
+
+  LOG("Unspecified obfuscation method: application will be forced to shut down!\n");
+  close_debugger();
 }
 
 /* Do the switch to the new context, by switching to these registers */
@@ -634,10 +632,11 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid, unsigned
   ptrace(PTRACE_GETREGS, debuggee_tid, NULL, &regs);
 
   /* Determine the destination address */
-  uintptr_t destination_address = get_destination(&regs, signal);
+  bool is_selfdebugger = !selfdebugger_pid;
+  uintptr_t destination_address = get_destination(debuggee_tid, signal, &regs, is_selfdebugger);
 
   /* If we're the self-debugger, we're switching to a fragment and we need to verify its destination address */
-  if (!selfdebugger_pid)
+  if (is_selfdebugger)
   {
     /* If the address is not OK, fuck up execution by continuing at next instruction address */
     if (!verify_fragment_destination(destination_address))
