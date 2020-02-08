@@ -46,15 +46,6 @@ typedef struct t_sd_map_entry{
   ptrdiff_t value;
 } t_sd_map_entry;
 
-/* This struct will contain a global state for every signal handled, and its contents will be
- * updated from the function wrapper code that will be inserted by Diablo.
- */
-typedef struct t_sd_state{
-  uintptr_t address;
-  uintptr_t link;
-  struct pt_regs regs;
-} t_sd_state;
-
 /* The functions that will be used by Diablo */
 #ifdef LINKIN_AFTER
 void DIABLO_Debugger_Init();

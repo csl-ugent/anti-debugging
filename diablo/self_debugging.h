@@ -38,9 +38,6 @@ class SelfDebuggingTransformer : public AbstractTransformer
     t_function* function_stm;
     t_function* function_str;
 
-    /* This is the symbol for a struct from the debugger. It will be filled in by the functions moved to debugger context */
-    t_symbol* global_state_sym;
-
     /* Variables for the Key-Value map used by the debugger to find which code to execute */
     t_symbol* map_sym;
     t_section* map_sec;
@@ -57,19 +54,15 @@ class SelfDebuggingTransformer : public AbstractTransformer
     /*** FUNCTIONS ***/
   private:
     /* Private helper functions */
-    void AppendInstructionsToBackupRegisterContext(t_bbl* bbl, t_regset regset, t_reg state_reg);
-    void AppendInstructionsToRestoreRegisterContext(t_bbl* bbl, t_regset regset, t_reg state_reg);
     void PrepareCfg (t_cfg* cfg);
     void TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins);
     void TransformLdr(t_bbl* bbl, t_arm_ins* orig_ins);
     void TransformStm(t_bbl* bbl, t_arm_ins* orig_ins);
     void TransformStr(t_bbl* bbl, t_arm_ins* orig_ins);
-    void TransformUseOfSP(t_bbl* bbl, t_arm_ins* arm_ins);
 
     /* Implement the virtual functions */
     t_bool CanTransformFunction (t_function* fun) const;
     void TransformBbl (t_bbl* bbl);
-    void TransformEntrypoint (t_function* fun);
     void TransformExit (t_cfg_edge* edge);
     void TransformIncomingEdgeImpl (t_bbl* bbl, t_cfg_edge* edge);
     void TransformIncomingTransformedEdgeImpl (t_arm_ins* ins, t_reloc* reloc);

@@ -74,7 +74,6 @@ size_t DIABLO_Debugger_nr_of_entries = 42;
 /* we will use a global variable to keep debugger state in handling signals. This works if we never handle multiple signals at once in the
  * debugger (through multithreading), as in that case we would need to use TLS.
  */
-t_sd_state DIABLO_Debugger_global_state;
 
 static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
 static pid_t debuggee_pid;/* The PID of the debuggee process, i.e., the opposite process */
@@ -630,46 +629,26 @@ static __attribute__((noreturn, naked)) void do_switch(struct pt_regs* regs)
 
 static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid, unsigned int signal)
 {
-  struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
+  /* Get the actual current registers of the debuggee */
+  struct pt_regs regs;
+  ptrace(PTRACE_GETREGS, debuggee_tid, NULL, &regs);
 
-  /* Gather information from opposite process. In doing so, differentiate between handling switch as protected application, and as self-debugger */
-  uintptr_t destination_address;
-  uintptr_t link_address;
-  if (selfdebugger_pid)
-  {
-    /* If we're the protected application, just steal the global state (including registers and addresses)
-     * from the self-debugger.
-     */
-    read_tracee_mem(&DIABLO_Debugger_global_state, sizeof(DIABLO_Debugger_global_state), (uintptr_t)&DIABLO_Debugger_global_state);
-    destination_address = DIABLO_Debugger_global_state.address;
-    link_address = DIABLO_Debugger_global_state.link;
+  /* Determine the destination address */
+  uintptr_t destination_address = get_destination(&regs, signal);
 
-    /* Print out the information returned by the fragment we executed */
-    LOG("ret addr: %"PRIxPTR"\n", destination_address);
-    LOG("ret link: %"PRIxPTR"\n", link_address);
-  }
-  else
-  {
-    /* If we're the self-debugger */
-#ifndef ENABLE_LOGGING
-    /* If we're not logging, get the registers now */
-    ptrace(PTRACE_GETREGS, debuggee_tid, NULL, regs);
-#endif
-
-    /* There's no link address */
-    link_address = 0;
-  }
-
-  /* Determine the destination address. If we're the protected application, we already have it */
+  /* If we're the self-debugger, we're switching to a fragment and we need to verify its destination address */
   if (!selfdebugger_pid)
   {
-    /* If we're the self-debugger, we're switching to a fragment and We need to verify its destination address.
-     * If the address is not OK, fuck up execution by continuing at next instruction address.
-     */
-    destination_address = get_destination(regs, signal);
-
+    /* If the address is not OK, fuck up execution by continuing at next instruction address */
     if (!verify_fragment_destination(destination_address))
       destination_address = 0;
+  }
+
+  /* If the destination address is that of the mapping, it's a return */
+  if (destination_address == (uintptr_t)DIABLO_Debugger_addr_mapping)
+  {
+      LOG("Returning!!\n");
+      destination_address = 1;
   }
 
   /* Prepare the debuggee to be continued at the debug loop, then actually let it continue */
@@ -679,29 +658,21 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid, unsigned
   ptrace(PTRACE_SETREGS, debuggee_tid, NULL, &new_regs);
   ptrace(PTRACE_CONT, debuggee_tid, NULL, NULL);
 
-  /* If a call occurred, update the link register */
-  if (link_address)
-    regs->uregs[14] = link_address;
-
   /* If we have a destination address, use it. Else just go to the next instruction */
   switch(destination_address)
   {
     case 0:
-      regs->uregs[15] += addr_size;
+      regs.uregs[15] += addr_size;
       break;
     case 1:
-      regs->uregs[15] = regs->uregs[14];
+      regs.uregs[15] = regs.uregs[14];
       break;
     default:
-      regs->uregs[15] = destination_address;
+      regs.uregs[15] = destination_address;
   }
 
-  /* Reset these fields, as they might get filled in by a code fragment */
-  DIABLO_Debugger_global_state.link = 0;
-  DIABLO_Debugger_global_state.address = 0;
-
   /* Do actual context switch */
-  do_switch(&DIABLO_Debugger_global_state.regs);
+  do_switch(&regs);
 }
 
 static __attribute__((noreturn)) void debug_main()
@@ -728,29 +699,29 @@ static __attribute__((noreturn)) void debug_main()
     LOG("Debugger entered for PID: %d\n", recv_tid);
 
 #ifdef ENABLE_LOGGING
-    struct pt_regs* regs = &DIABLO_Debugger_global_state.regs;/* Use regs variable as pointer to member to avoid more verbose code */
+    struct pt_regs regs;/* Use regs variable as pointer to member to avoid more verbose code */
     /* Get the registers. If logging is enabled, we do this now because so we can log them before potentially exiting */
-    ret = ptrace(PTRACE_GETREGS, recv_tid, NULL, regs);
+    ret = ptrace(PTRACE_GETREGS, recv_tid, NULL, &regs);
     if (ret == -1)
       LOG("PTRACE_GETREGS failed.\n");
     else
     {
-      LOG("Register R0: %lx\n", regs->uregs[0]);
-      LOG("Register R1: %lx\n", regs->uregs[1]);
-      LOG("Register R2: %lx\n", regs->uregs[2]);
-      LOG("Register R3: %lx\n", regs->uregs[3]);
-      LOG("Register R4: %lx\n", regs->uregs[4]);
-      LOG("Register R5: %lx\n", regs->uregs[5]);
-      LOG("Register R6: %lx\n", regs->uregs[6]);
-      LOG("Register R7: %lx\n", regs->uregs[7]);
-      LOG("Register R8: %lx\n", regs->uregs[8]);
-      LOG("Register R9: %lx\n", regs->uregs[9]);
-      LOG("Register R10: %lx\n", regs->uregs[10]);
-      LOG("Frame pointer: %lx\n", regs->uregs[11]);
-      LOG("IP link: %lx\n", regs->uregs[12]);
-      LOG("Stack pointer: %lx\n", regs->uregs[13]);
-      LOG("Link register: %lx\n", regs->uregs[14]);
-      LOG("From: %lx\n", regs->uregs[15]);
+      LOG("Register R0: %lx\n", regs.uregs[0]);
+      LOG("Register R1: %lx\n", regs.uregs[1]);
+      LOG("Register R2: %lx\n", regs.uregs[2]);
+      LOG("Register R3: %lx\n", regs.uregs[3]);
+      LOG("Register R4: %lx\n", regs.uregs[4]);
+      LOG("Register R5: %lx\n", regs.uregs[5]);
+      LOG("Register R6: %lx\n", regs.uregs[6]);
+      LOG("Register R7: %lx\n", regs.uregs[7]);
+      LOG("Register R8: %lx\n", regs.uregs[8]);
+      LOG("Register R9: %lx\n", regs.uregs[9]);
+      LOG("Register R10: %lx\n", regs.uregs[10]);
+      LOG("Frame pointer: %lx\n", regs.uregs[11]);
+      LOG("IP link: %lx\n", regs.uregs[12]);
+      LOG("Stack pointer: %lx\n", regs.uregs[13]);
+      LOG("Link register: %lx\n", regs.uregs[14]);
+      LOG("From: %lx\n", regs.uregs[15]);
     }
 #endif
 

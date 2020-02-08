@@ -35,7 +35,6 @@ struct s_bbl {
 // abstract class:
 class Obfus {
   protected:
-    void obfus_stack_constant(t_object* obj, const t_cfg_edge* edge, t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb, t_regset& available, t_uint32 adr_size, t_uint32 constant);
   /*
     IS_MUTILATED_ADDR_MAPPING ::
       Lets use a simple strategy to verify whether a context switch (signal invocation) is intended to execute/process a migrated fragement
@@ -50,16 +49,16 @@ class Obfus {
   public:
     virtual void prepareCFG(t_cfg* cfg) {}
     virtual void postProcess(t_cfg* cfg) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant) = 0;
     virtual void generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 offset, t_section* map_sec);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun) {}
+    virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target) = 0;
 };
 
 // concrete implementations:
 class Obfus_m_bkpt_1 			: public Obfus {
   // original BKPT method
   public:
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // SIGFPE and SIGILL methods:
@@ -69,19 +68,17 @@ class Obfus_m_fpe_1 			: public Obfus {
   // on our ARMv7 board this method generates a SIGILL (illegal instruction signal)  instead of a SEGFPE, but it works.
   // It is highly advised to use this method for experimental/educational purposes only.
   public:
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
-class Obfus_m_fpe_2 			: public Obfus_m_fpe_1 {
+class Obfus_m_fpe_2 			: public Obfus {
   // division by zero and storing offset [PC, dest] in numerator.
   // notice: In the ARMv7-R profile, the implementation of SDIV and UDIV in the ARM instruction set is OPTIONAL.
   // on our ARMv7 board this method generates a SIGILL (illegal instruction signal)  instead of a SEGFPE, but it works.
   // It is highly advised to use this method for experimental/educational purposes only.
-  protected:
-    t_bbl* obfus_final_bbl = NULL;
   public:
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant) {}
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // SIGSEGV methods:
@@ -106,11 +103,10 @@ class Obfus_m_segv_1 			: public Obfus_segv_abstract {
   // use random_ill_addr and jmp to random STR/LDR and using the stack+mapping
 
   protected:
-    t_bbl* obfus_final_bbl = NULL;
     bool delete_INS_BBL_FromMapping = true; // if true: disallow usage of same LDR/STR instruction for different context switches.
     void obfus_intersect_available_and_mapped(t_regset& available, std::vector<s_bbl*>& vfil);
     t_uint32 obfus_generate_random_ill_addr(t_uint32 immed, bool neg_immed);
-    void obfus_add_illegal_address(t_cfg* cfg, t_arm_ins* arm_ins, t_bbl* bbl, bool isThumb, t_reg regB, t_uint32 immed, bool neg_immed);
+    void obfus_add_illegal_address(t_cfg* cfg, t_bbl* bbl, bool isThumb, t_reg regB, t_uint32 immed, bool neg_immed);
     t_regset obfus_get_used_registers_current_state(t_bbl* bbl);
     virtual void obfus_fill_stack_from_bbl(s_bbl* rbbl, s_ins* rsins, std::stack< std::pair<t_arm_ins*, s_bbl*> >& st);
     virtual bool obfus_process_stack_get_pairSplit_regB_check(std::pair<t_arm_ins*, s_bbl*>& pairSplit, s_ins* rsins);
@@ -120,29 +116,27 @@ class Obfus_m_segv_1 			: public Obfus_segv_abstract {
     virtual std::pair<int, s_bbl*> obfus_prepare_rbbl(s_bbl* rbbl, s_ins* rsins, t_bbl* bbl, std::vector<t_arm_ins*>& vfilINS, std::pair<t_arm_ins*, s_bbl*>& pairSplit);
     std::pair<s_bbl*, s_ins*> obfus_get_random_struct(std::vector<s_bbl*>& vfil, bool deleteFromVFIL);
     void delete_from_mapping(s_bbl* sbbl, s_ins* sins);
-    short int obfus_process_rbbl(t_cfg* cfg, t_arm_ins* arm_ins, t_bbl* bbl, bool isThumb, s_bbl*& rbbl, s_ins* rsins, std::vector<t_arm_ins*>& vfilINS, std::pair<t_arm_ins*, s_bbl*>& pairSplit);
+    short int obfus_process_rbbl(t_cfg* cfg, t_bbl* bbl, bool isThumb, s_bbl*& rbbl, s_ins* rsins, std::vector<t_arm_ins*>& vfilINS, std::pair<t_arm_ins*, s_bbl*>& pairSplit);
 
   public:
     Obfus_m_segv_1(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_segv_abstract(enforceDummyInstructions, allowImmediateOffset) { }
     virtual void prepareCFG(t_cfg* cfg);
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_2 			: public Obfus_m_segv_1 {
   // generate ill_addr_encoded_offset and jmp to random STR/LDR
   public:
     Obfus_m_segv_2(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_1(enforceDummyInstructions, allowImmediateOffset) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant) {}
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_3 			: public Obfus_m_segv_2 {
   // simplified version of m_2: insert a random STR/LDR instead of jumping to existing one.
   public:
     Obfus_m_segv_3() : Obfus_m_segv_2(false, false) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -171,8 +165,7 @@ class Obfus_m_segv_4 			: public Obfus_m_segv_2 {
   public:
     Obfus_m_segv_4(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_2(enforceDummyInstructions, allowImmediateOffset) { FATAL(("DEPRECATED")); }
     virtual void prepareCFG(t_cfg* cfg);
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -197,8 +190,8 @@ class Obfus_m_segv_4_revised 	: public Obfus_m_segv_4 {
     struct sm4 {
       t_object* obj;
       t_cfg* cfg;
-      t_regset possible = RegsetNew();
-      t_function* fun;
+      t_regset available = RegsetNew();
+      t_relocatable* target;
       t_bbl* obfus_final_bbl;
     };
     std::vector<sm4*> vm4;
@@ -210,8 +203,7 @@ class Obfus_m_segv_4_revised 	: public Obfus_m_segv_4 {
     Obfus_m_segv_4_revised(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_4(enforceDummyInstructions, allowImmediateOffset) { FATAL(("DEPRECATED")); }
     virtual void prepareCFG(t_cfg* cfg) {}
     virtual void postProcess(t_cfg* cfg);
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -236,12 +228,11 @@ class Obfus_m_segv_5 			: public Obfus_m_segv_2 {
   */
   protected:
     void available_with_other_bbl(s_bbl* rbbl, s_ins* rsins, t_regset& available, t_regset& ret);
-    unsigned int insert_addr_ins(t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb, t_regset& regs, t_reg& ill_reg);
+    unsigned int insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg);
 
   public:
     Obfus_m_segv_5(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_2(enforceDummyInstructions, allowImmediateOffset) { FATAL(("DEPRECATED")); }
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_6 			: public Obfus_m_segv_2 {
@@ -262,12 +253,11 @@ class Obfus_m_segv_6 			: public Obfus_m_segv_2 {
       **This method takes the first possible solution with at least one dummy instruction but it doesn't search for the most optimal one.
   */
   protected:
-    unsigned int insert_addr_ins(t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb, t_regset& regs, t_reg& ill_reg);
+    unsigned int insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg);
 
   public:
     Obfus_m_segv_6(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_2(enforceDummyInstructions, allowImmediateOffset) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_7 			: public Obfus_m_segv_6 {
@@ -291,13 +281,12 @@ class Obfus_m_segv_7 			: public Obfus_m_segv_6 {
   */
 
   protected:
-    void insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_bbl* migratedBBL, t_regset& rest, t_arm_ins* arm_ins, bool isThumb, t_object* obj, t_cfg* cfg);
+    void insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_relocatable* target, t_regset& rest, bool isThumb, t_object* obj, t_cfg* cfg);
     t_arm_condition_code random_cond();
 
   public:
     Obfus_m_segv_7(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_6(enforceDummyInstructions, allowImmediateOffset) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_8 			: public Obfus_m_segv_7 {
@@ -321,13 +310,12 @@ class Obfus_m_segv_8 			: public Obfus_m_segv_7 {
   */
 
   protected:
-    void find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, t_cfg* cfg, t_arm_ins* arm_ins, bool isThumb, t_regset& available, std::vector<s_bbl*>& vfil);
+    void find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, t_cfg* cfg, bool isThumb, t_regset& available, std::vector<s_bbl*>& vfil);
     t_arm_condition_code determine_condition_based_on_flag(t_bbl* bbl);
 
   public:
     Obfus_m_segv_8(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_7(enforceDummyInstructions, allowImmediateOffset) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_9      : public Obfus_m_segv_2 {
@@ -343,12 +331,11 @@ class Obfus_m_segv_9      : public Obfus_m_segv_2 {
   */
   public:
     Obfus_m_segv_9() : Obfus_m_segv_2(false, false) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 
   protected:
     Obfus_m_segv_9(bool enforceDummyInstructions) : Obfus_m_segv_2(enforceDummyInstructions, false) {} //used by segv_10
-    virtual void push_LR_onto_stack(t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb);
+    virtual void push_LR_onto_stack(t_bbl* bbl, bool isThumb);
 };
 
 class Obfus_m_segv_10      : public Obfus_m_segv_9 {
@@ -359,12 +346,11 @@ class Obfus_m_segv_10      : public Obfus_m_segv_9 {
   */
   protected:
     virtual bool obfus_is_legal_INS(t_bbl* bbl, t_arm_ins* arm_ins);
+    virtual void obfus_INS_Mapping(t_cfg* cfg);
 
   public:
     Obfus_m_segv_10(bool enforceDummyInstructions) : Obfus_m_segv_9(enforceDummyInstructions) {}
-    virtual void start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant);
-    virtual void obfus_INS_Mapping(t_cfg* cfg);
-    virtual void obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun);
+    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 #endif

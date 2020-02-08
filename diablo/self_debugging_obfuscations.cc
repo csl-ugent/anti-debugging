@@ -12,7 +12,7 @@
 
 using namespace std;
 
-void Obfus::obfus_stack_constant(t_object* obj, const t_cfg_edge* edge, t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb, t_regset& available, t_uint32 adr_size, t_uint32 constant)
+void Obfus::encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant)
 {
   /* We will append the following code:
    * [OPTIONAL] PUSH {R0, R1} (if there are no dead regs)
@@ -21,10 +21,10 @@ void Obfus::obfus_stack_constant(t_object* obj, const t_cfg_edge* edge, t_bbl* b
    * 1.: PUSH const_reg
    * 2.: STR const_reg [SP + 4] (no dead regs, R0 is const_reg)
    *     POP const_reg
-   * [OPTIONAL] ADR LR, return_bbl (if we're dealing with a call edge)
-   * BKPT 0x0000
    */
+  t_bool isThumb = ArmBblIsThumb(bbl);
   t_uint32 nr_of_dead_regs = RegsetCountRegs(available);
+  t_arm_ins* arm_ins;
 
   /* Find a dead register to produce the constant in. If we don't find one, push and pop a live reg */
   t_reg const_reg;
@@ -54,26 +54,6 @@ void Obfus::obfus_stack_constant(t_object* obj, const t_cfg_edge* edge, t_bbl* b
   }
   else
     ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << const_reg), ARM_CONDITION_AL, isThumb);
-
-  /* If we're dealing with a call edge, emulate the call by moving the return address to LR */
-  if (CfgEdgeTestCategoryOr(edge, ET_CALL))
-  {
-    ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R14, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-    t_bbl* bbl_successor = CFG_EDGE_TAIL(CFG_EDGE_CORR(edge));
-    t_reloc* reloc = RelocTableAddRelocToRelocatable(
-        OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), /* addend */
-        T_RELOCATABLE(arm_ins), /* from */
-        AddressNullForObject(obj),  /* from-offset */
-        T_RELOCATABLE(bbl_successor), /* to */
-        AddressNullForObject(obj), /* to-offset */
-        FALSE, /* hell */
-        NULL, /* edge*/
-        NULL, /* corresp */
-        NULL, /* sec */
-        "R00A00+" "\\" WRITE_32);
-    ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
-  }
 }
 
 void Obfus::generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 offset, t_section* map_sec)
@@ -118,45 +98,21 @@ void Obfus::generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 offse
         "R00R01-" "\\" WRITE_32);
 }
 
-void Obfus_m_bkpt_1::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
-  t_bool isThumb = ArmBblIsThumb(bbl);
-  t_arm_ins* arm_ins = NULL;
-  //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb); // add Nop to make searching in asm easier !!! remove in production !!!
-  //push constant onto stack. The constant indicates the position in the mapping of migrated fragments for debugger context.
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
-  obfus_stack_constant(obj, edge, bbl, arm_ins, isThumb, available, adr_size, constant);
   // Create the breakpoint to switch to the debugger
-  /*ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb);
-    ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb);
-    ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb);
-    ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb);
-    ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb);
-    ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb);*/
-
+  t_arm_ins* arm_ins;
+  t_bool isThumb = ArmBblIsThumb(bbl);
   ArmMakeInsForBbl(Bkpt, Append, arm_ins, bbl, isThumb); //BKPT
 
   //om de liveness informatie van de aangemaakt BKPT instructie aan te passen zodat het CPSR register niet meer in de 'use' regset zit:
   t_regset regs_use = ARM_INS_REGS_USE(arm_ins);
   RegsetSetSubReg(regs_use, ARM_REG_CPSR);
   ARM_INS_SET_REGS_USE(arm_ins,regs_use);
-
-  // Adjust the incoming edge to go to hell
-  CfgEdgeChangeTail(edge, CFG_HELL_NODE(cfg));
-  CFG_EDGE_SET_CAT(edge, ET_IPJUMP);
-  CFG_EDGE_SET_FLAGS(edge, CFG_EDGE_FLAGS(edge) | transformed_hell_edge_flag);
-
 }
 
-void Obfus_m_fpe_1::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_fpe_1::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
-  t_bool isThumb = ArmBblIsThumb(bbl);
-  t_arm_ins* arm_ins = NULL;
-
-  //push constant onto stack. The constant indicates the position in the mapping of migrated fragments for debugger context.
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
-  obfus_stack_constant(obj, edge, bbl, arm_ins, isThumb, available, adr_size, constant);
-
   if (RegsetCountRegs(available) < 2)
     FATAL(("At least 2 avail. regs required"));
 
@@ -177,39 +133,20 @@ void Obfus_m_fpe_1::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* 
 
   // X = rand()%100    ;   Y = 0
   // X = X/Y  -> SIGFPE only if the machine supports the DIV operation and result isn't turned into zero.
+  t_arm_ins* arm_ins;
+  t_bool isThumb = ArmBblIsThumb(bbl);
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regX, ARM_REG_NONE, rand()%100, ARM_CONDITION_AL);
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regY, ARM_REG_NONE, 0, ARM_CONDITION_AL);
   ArmMakeInsForBbl(Div, Append, arm_ins, bbl, isThumb, regX, regX, regY, 0, ARM_CONDITION_AL);
-
-  // Adjust the incoming edge to go to hell
-  CfgEdgeChangeTail(edge, CFG_HELL_NODE(cfg));
-  CFG_EDGE_SET_CAT(edge, ET_IPJUMP);
-  CFG_EDGE_SET_FLAGS(edge, CFG_EDGE_FLAGS(edge) | transformed_hell_edge_flag);
-
 }
 
-void Obfus_m_fpe_2::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_fpe_2::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
-  obfus_final_bbl = bbl;
-
-  // Adjust the incoming edge to go to hell
-  CfgEdgeChangeTail(edge, CFG_HELL_NODE(cfg));
-  CFG_EDGE_SET_CAT(edge, ET_IPJUMP);
-  CFG_EDGE_SET_FLAGS(edge, CFG_EDGE_FLAGS(edge) | transformed_hell_edge_flag);
-}
-
-void Obfus_m_fpe_2::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
-{
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   else if (RegsetCountRegs(available) < 2)
     FATAL(("At least 2 avail. regs required"));
-
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   t_reg regX = ARM_REG_NONE, regY = ARM_REG_NONE;
   REGSET_FOREACH_REG(available, regX)
@@ -228,6 +165,7 @@ void Obfus_m_fpe_2::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg*
 
   // X = 'offset'    ;   Y = 0
   // X = X/Y  -> SIGFPE only if the machine supports the DIV operation and result isn't turned into zero.
+  t_arm_ins* arm_ins;
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regX, ARM_REG_NONE, 0, ARM_CONDITION_AL);
   t_arm_ins* numerator_ins = arm_ins;
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regY, ARM_REG_NONE, 0, ARM_CONDITION_AL);
@@ -243,7 +181,7 @@ void Obfus_m_fpe_2::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg*
       AddressNullForObject(obj), /* addend */
       T_RELOCATABLE(numerator_ins), /* from */  // address produced here
       AddressNullForObject(obj),  /* from-offset */
-      T_RELOCATABLE(migratedBBL), /* to */ // R00 confirmed
+      target, /* to */ // R00 confirmed
       AddressNullForObject(obj), /* to-offset */
       FALSE, /* hell */
       NULL, /* edge*/
@@ -406,7 +344,7 @@ t_uint32 Obfus_m_segv_1::obfus_generate_random_ill_addr(t_uint32 immed, bool neg
   }
 }
 
-void Obfus_m_segv_1::obfus_add_illegal_address(t_cfg* cfg, t_arm_ins* arm_ins, t_bbl* bbl, bool isThumb, t_reg regB, t_uint32 immed, bool neg_immed)
+void Obfus_m_segv_1::obfus_add_illegal_address(t_cfg* cfg, t_bbl* bbl, bool isThumb, t_reg regB, t_uint32 immed, bool neg_immed)
 {
   // We have to store each byte in a separate variable,
   // because we cannot 'Mov' an immediate with more than 8 bits (1 byte);
@@ -415,6 +353,7 @@ void Obfus_m_segv_1::obfus_add_illegal_address(t_cfg* cfg, t_arm_ins* arm_ins, t
   // Finally we re-assemble the 32bit using "Add" instructions.
   //    https://alisdair.mcdiarmid.org/arm-immediate-value-encoding/
 
+  t_arm_ins* arm_ins;
   t_uint32 X = obfus_generate_random_ill_addr(immed, neg_immed);
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regB, ARM_REG_NONE, 0, ARM_CONDITION_AL);
   ArmMakeConstantProducer(arm_ins, X);
@@ -713,7 +652,7 @@ void Obfus_m_segv_1::delete_from_mapping(s_bbl* sbbl, s_ins* sins)
   }
 }
 
-short int Obfus_m_segv_1::obfus_process_rbbl(t_cfg* cfg, t_arm_ins* arm_ins, t_bbl* bbl, bool isThumb, s_bbl*& rbbl, s_ins* rsins, vector<t_arm_ins*>& vfilINS, pair<t_arm_ins*, s_bbl*>& pairSplit)
+short int Obfus_m_segv_1::obfus_process_rbbl(t_cfg* cfg, t_bbl* bbl, bool isThumb, s_bbl*& rbbl, s_ins* rsins, vector<t_arm_ins*>& vfilINS, pair<t_arm_ins*, s_bbl*>& pairSplit)
 {
   std::pair<int, s_bbl*> ppair = obfus_prepare_rbbl(rbbl, rsins, bbl, vfilINS, pairSplit);
   VERBOSE(0, ("\t ppair %i", ppair.first));
@@ -732,30 +671,12 @@ void Obfus_m_segv_1::prepareCFG(t_cfg* cfg)
   //enforceDummyInstructions = false;
 }
 
-void Obfus_m_segv_1::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
-{
-  obfus_final_bbl = bbl;
-
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
-  bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
-  //push constant onto stack. The constant indicates the position in the mapping of migrated fragments for debugger context.
-  obfus_stack_constant(obj, edge, bbl, arm_ins, isThumb, available, adr_size, constant);
-}
-
-void Obfus_m_segv_1::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
+void Obfus_m_segv_1::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-  t_bbl* bbl = obfus_final_bbl;
-
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
-  bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
 
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
 
   vector<s_bbl*> vfil;
@@ -766,17 +687,19 @@ void Obfus_m_segv_1::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   short int processi = 2;
   vector<t_arm_ins*> vfilINS;
   pair<t_arm_ins*, s_bbl*> pairSplit;
+  t_arm_ins* arm_ins;
+  bool isThumb = ArmBblIsThumb(bbl);
   while (processi != 0) {
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
   }
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
   VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
   // add instructions to alter regB and generate an ill_addr.
-  obfus_add_illegal_address(cfg, arm_ins, bbl, isThumb, rsins->B, rsins->immed, rsins->neg_immed);
+  obfus_add_illegal_address(cfg, bbl, isThumb, rsins->B, rsins->immed, rsins->neg_immed);
 
   // add a jump instruction.
   ArmMakeInsForBbl(UncondBranch, Append, arm_ins, bbl, isThumb);
@@ -786,7 +709,7 @@ void Obfus_m_segv_1::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   VERBOSE(0, ("edge create %02X %02X", BBL_CADDRESS(bbl), BBL_CADDRESS(rbbl->bbl)));
 }
 
-void Obfus_m_segv_2::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_segv_2::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   /*
      Works quite similar to method_1 except that the ill_addr isn't a random number,
@@ -798,20 +721,13 @@ void Obfus_m_segv_2::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl*
      The Debugger will be able to load the ill_addr, since it is stored in a register; and it also knows A, since thats where SIGSEGV occured (the PC points to it),
      We can extract the immediate from A's hex value. These three known variables allow us to reconstruct B and change PC to B.
      */
-  obfus_final_bbl = bbl;
-}
 
-void Obfus_m_segv_2::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
-{
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   vector<s_bbl*> vfil;
   obfus_intersect_available_and_mapped(available, vfil);
@@ -824,7 +740,7 @@ void Obfus_m_segv_2::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   while (processi != 0) {
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
   }
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
@@ -859,7 +775,7 @@ void Obfus_m_segv_2::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
       AddressNullForObject(obj), /* addend */
       T_RELOCATABLE(ill_ins_encoded), /* from */  // address produced here
       AddressNullForObject(obj),  /* from-offset */
-      T_RELOCATABLE(migratedBBL), /* to */ // R00 confirmed
+      target, /* to */ // R00 confirmed
       AddressNullForObject(obj), /* to-offset */
       FALSE, /* hell */
       NULL, /* edge*/
@@ -869,27 +785,20 @@ void Obfus_m_segv_2::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
 }
 
-void Obfus_m_segv_3::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_segv_3::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   /*
      Works quite similar to method_2
      except that we will not bother using a random LDR/STR, but insert our own.
      This decreases complexity/obfuscation but the overhead is lower, thus overall performance is a bit higher.
      */
-  obfus_final_bbl = bbl;
-}
 
-void Obfus_m_segv_3::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
-{
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   // look for an available register: regB which will hold the ill_addr_encoded_offset.
   t_reg regB = ARM_REG_NONE;
@@ -930,7 +839,7 @@ void Obfus_m_segv_3::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
       AddressNullForObject(obj), /* addend */
       T_RELOCATABLE(ill_ins_encoded), /* from */  // address produced here
       AddressNullForObject(obj),  /* from-offset */
-      T_RELOCATABLE(migratedBBL), /* to */ // R00 confirmed
+      target, /* to */ // R00 confirmed
       AddressNullForObject(obj), /* to-offset */
       FALSE, /* hell */
       NULL, /* edge*/
@@ -1009,22 +918,14 @@ void Obfus_m_segv_4::prepareCFG(t_cfg* cfg)
   obfus_INS_Mapping(cfg);
 }
 
-void Obfus_m_segv_4::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
-{
-  obfus_final_bbl = bbl;
-}
-
-void Obfus_m_segv_4::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
+void Obfus_m_segv_4::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   vector<s_bbl*> vfil;
   obfus_intersect_available_and_mapped(available, vfil);
@@ -1050,7 +951,7 @@ void Obfus_m_segv_4::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   while (processi != 0) {
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
   }
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
@@ -1086,7 +987,7 @@ void Obfus_m_segv_4::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
       AddressNullForObject(obj), // addend
       T_RELOCATABLE(ill_ins_encoded), // from   // address produced here
       AddressNullForObject(obj),  // from-offset
-      T_RELOCATABLE(migratedBBL), // to  // R00 confirmed
+      target, // to  // R00 confirmed
       AddressNullForObject(obj), // to-offset
       FALSE, // hell
       NULL, // edge
@@ -1185,18 +1086,16 @@ void Obfus_m_segv_4_revised::postProcess(t_cfg* cfg)
     sm4* sm = vm4[i];
     t_object* obj = sm->obj;
     t_cfg* cfg = sm->cfg;
-    t_regset possible = RegsetNew();
-    RegsetSetDup(possible, sm->possible);
-    t_function* fun = sm->fun;
+    t_regset available = RegsetNew();
+    RegsetSetDup(available, sm->available);
+    t_relocatable* target = sm->target;
     t_bbl* bbl = sm->obfus_final_bbl;
 
 
-    t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+    t_arm_ins* arm_ins;
     bool isThumb = ArmBblIsThumb(bbl);
-    t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
     if (RegsetIsEmpty(available))
       FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-    t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
     vector<s_bbl*> vfil;
     obfus_intersect_available_and_mapped(available, vfil);
@@ -1217,7 +1116,7 @@ void Obfus_m_segv_4_revised::postProcess(t_cfg* cfg)
     while (processi != 0) {
       ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
       rpair = obfus_get_random_struct(vfil, true);
-      processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+      processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
     }
     s_bbl* rbbl = rpair.first;
     s_ins* rsins = rpair.second;
@@ -1253,7 +1152,7 @@ void Obfus_m_segv_4_revised::postProcess(t_cfg* cfg)
         AddressNullForObject(obj), // addend
         T_RELOCATABLE(ill_ins_encoded), // from   // address produced here
         AddressNullForObject(obj),  // from-offset
-        T_RELOCATABLE(migratedBBL), // to  // R00 confirmed
+        target, // to  // R00 confirmed
         AddressNullForObject(obj), // to-offset
         FALSE, // hell
         NULL, // edge
@@ -1267,19 +1166,14 @@ void Obfus_m_segv_4_revised::postProcess(t_cfg* cfg)
 
 }
 
-void Obfus_m_segv_4_revised::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
-{
-  obfus_final_bbl = bbl;
-}
-
-void Obfus_m_segv_4_revised::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
+void Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   sm4* s = new sm4();
   s->obj = obj;
   s->cfg = cfg;
-  RegsetSetDup(s->possible, possible);
-  s->obfus_final_bbl = obfus_final_bbl;
-  s->fun = fun;
+  RegsetSetDup(s->available, available);
+  s->obfus_final_bbl = bbl;
+  s->target = target;
   vm4.push_back(s);
 }
 
@@ -1301,7 +1195,7 @@ void Obfus_m_segv_5::available_with_other_bbl(s_bbl* rbbl, s_ins* rsins, t_regse
 
 }
 
-unsigned int Obfus_m_segv_5::insert_addr_ins(t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb, t_regset& regs, t_reg& ill_reg)
+unsigned int Obfus_m_segv_5::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg)
 {
   //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb); // add Nop to make searching in asm easier !!! remove in production !!!
 
@@ -1337,25 +1231,16 @@ unsigned int Obfus_m_segv_5::insert_addr_ins(t_bbl* bbl, t_arm_ins* arm_ins, boo
   return 0;
 }
 
-void Obfus_m_segv_5::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_segv_5::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
-  obfus_final_bbl = bbl;
   //enforceDummyInstructions = false; // we set this to false since we will be adding custom instructions ; 'true' can be fatal and too restrictive for small applications.
-}
 
-void Obfus_m_segv_5::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
-{
-  VERBOSE(0, (" <<<<<  obfus_encode_illegal_address_as_offset >>>>> "));
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   vector<s_bbl*> vfil;
   obfus_intersect_available_and_mapped(available, vfil);
@@ -1372,7 +1257,7 @@ void Obfus_m_segv_5::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   short int processi = 2;
   while (!vfil.empty()) {
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
     if (processi == 0) {
       // find available { register(s) \excl. rsins->B } intersected by available_regs( rbbl->bbl )
       t_regset vav = RegsetNew();
@@ -1425,7 +1310,7 @@ void Obfus_m_segv_5::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   rbbl = psp.first;
 
   VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
-  unsigned int addedValue = insert_addr_ins(rbbl->bbl, arm_ins, isThumb, bestRegs, rsins->B);
+  unsigned int addedValue = insert_addr_ins(rbbl->bbl, isThumb, bestRegs, rsins->B);
 
 
   // create dummy 'mov' which will be changed by AddressProducer into an ill_addr_encoded_offset.
@@ -1456,7 +1341,7 @@ void Obfus_m_segv_5::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
       AddressNullForObject(obj), // addend
       T_RELOCATABLE(ill_ins_encoded), // from   // address produced here
       AddressNullForObject(obj),  // from-offset
-      T_RELOCATABLE(migratedBBL), // to  // R00 confirmed
+      target, // to  // R00 confirmed
       AddressNullForObject(obj), // to-offset
       FALSE, // hell
       NULL, // edge
@@ -1469,8 +1354,9 @@ void Obfus_m_segv_5::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
 
 }
 
-unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb, t_regset& regs, t_reg& ill_reg)
+unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg)
 {
+  t_arm_ins* arm_ins;
   //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb); // add Nop to make searching in asm easier !!! remove in production !!!
   t_reg tmpr = ARM_REG_NONE;
   t_reg tmprr = ARM_REG_NONE;
@@ -1508,27 +1394,18 @@ unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, t_arm_ins* arm_ins, boo
   return tot;
 }
 
-void Obfus_m_segv_6::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_segv_6::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
-  obfus_final_bbl = bbl;
   //enforceDummyInstructions = true;
-}
 
-void Obfus_m_segv_6::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
-{
-  VERBOSE(0, (" <<<<<  obfus_encode_illegal_address_as_offset >>>>> "));
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   if (RegsetCountRegs(available) < 2)
     FATAL(("At least 2 avail. regs required"));
-
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   vector<s_bbl*> vfil;
   obfus_intersect_available_and_mapped(available, vfil);
@@ -1543,7 +1420,7 @@ void Obfus_m_segv_6::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   while (processi != 0) {
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
 
     if (processi == 0) {//let us test whether this solution is usable or not ::
       for (int i = 0; i < (int)vfilINS.size(); i++)
@@ -1588,7 +1465,7 @@ void Obfus_m_segv_6::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   t_arm_ins* ill_ins_encoded = arm_ins; // the AddressProducer will use this instruction to store the ill_addr_encoded_offset.
   t_arm_ins* ins_LDR_STR = rsins->ins; // *from* this instruction, the offset will be calculated, to *to* migrated fragment.
 
-  unsigned int addedValue = insert_addr_ins(bbl, arm_ins, isThumb, rest, rsins->B);
+  unsigned int addedValue = insert_addr_ins(bbl, isThumb, rest, rsins->B);
 
   // add a jump instruction.
   ArmMakeInsForBbl(UncondBranch, Append, arm_ins, bbl, isThumb);
@@ -1617,7 +1494,7 @@ void Obfus_m_segv_6::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
       AddressNullForObject(obj), // addend
       T_RELOCATABLE(ill_ins_encoded), // from   // address produced here
       AddressNullForObject(obj),  // from-offset
-      T_RELOCATABLE(migratedBBL), // to  // R00 confirmed
+      target, // to  // R00 confirmed
       AddressNullForObject(obj), // to-offset
       FALSE, // hell
       NULL, // edge
@@ -1630,7 +1507,7 @@ void Obfus_m_segv_6::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
 
 }
 
-void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_bbl* migratedBBL, t_regset& rest, t_arm_ins* arm_ins, bool isThumb, t_object* obj, t_cfg* cfg)
+void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_relocatable* target, t_regset& rest, bool isThumb, t_object* obj, t_cfg* cfg)
 {
   //lets use a random number of available registers (enhance randomness) ::
   t_regset rest_A = RegsetNew();
@@ -1643,13 +1520,14 @@ void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins,
     if (++j > N_rand_regs)
       RegsetSetSubReg(rest_A, tmpr); // delete all the rest
 
+  t_arm_ins* arm_ins;
   //ArmMakeInsForBbl(Noop, Append, arm_ins, from_bbl, isThumb);
   // create dummy 'mov' which will be changed by AddressProducer into an ill_addr_encoded_offset.
   ArmMakeInsForBbl(Mov, Append, arm_ins, from_bbl, isThumb, rsins->B, ARM_REG_NONE, 0, ARM_CONDITION_AL);
   t_arm_ins* ill_ins_encoded_A = arm_ins; // the AddressProducer will use this instruction to store the ill_addr_encoded_offset.
   t_arm_ins* ins_LDR_STR = rsins->ins; // *from* this instruction, the offset will be calculated, to *to* migrated fragment.
 
-  unsigned int addedValue = insert_addr_ins(from_bbl, arm_ins, isThumb, rest_A, rsins->B);
+  unsigned int addedValue = insert_addr_ins(from_bbl, isThumb, rest_A, rsins->B);
   VERBOSE(0, ("addedValue: %02x", addedValue));
 
   if (cond == ARM_CONDITION_AL)
@@ -1679,7 +1557,7 @@ void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins,
       AddressNullForObject(obj), // addend
       T_RELOCATABLE(ill_ins_encoded_A), // from   // address produced here
       AddressNullForObject(obj),  // from-offset
-      T_RELOCATABLE(migratedBBL), // to  // R00 confirmed
+      target, // to  // R00 confirmed
       AddressNullForObject(obj), // to-offset
       FALSE, // hell
       NULL, // edge
@@ -1731,27 +1609,18 @@ t_arm_condition_code Obfus_m_segv_7::random_cond()
   }
 }
 
-void Obfus_m_segv_7::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_segv_7::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
-  obfus_final_bbl = bbl;
   //enforceDummyInstructions = true;
-}
 
-void Obfus_m_segv_7::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
-{
-  VERBOSE(0, (" <<<<<  obfus_encode_illegal_address_as_offset >>>>> "));
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   if (RegsetCountRegs(available) < 2)
     FATAL(("At least 2 avail. regs required"));
-
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   vector<s_bbl*> vfil;
   obfus_intersect_available_and_mapped(available, vfil);
@@ -1766,7 +1635,7 @@ void Obfus_m_segv_7::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   while (processi != 0) {
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
 
     if (processi == 0) {//let us test whether this solution is usable or not ::
       for (int i = 0; i < (int)vfilINS.size(); i++)
@@ -1802,13 +1671,12 @@ void Obfus_m_segv_7::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
 
   // if splitting ever fails, use: "BblSplitBlockNoTestOnBranches" instead of "BblSplitBlock"
   t_bbl* bbl_A = BblSplitBlock(bbl, T_INS(BBL_INS_LAST(bbl)), FALSE /* before */); // brand new/empty BBL **fallthrough edge created automatically
-  insert_ctx_code(bbl_A, rbbl, rsins, ARM_CONDITION_AL,  migratedBBL, rest, arm_ins, isThumb, obj, cfg);
-  insert_ctx_code(bbl,   rbbl, rsins, rcond,       migratedBBL, rest, arm_ins, isThumb, obj, cfg);
+  insert_ctx_code(bbl_A, rbbl, rsins, ARM_CONDITION_AL, target, rest, isThumb, obj, cfg);
+  insert_ctx_code(bbl, rbbl, rsins, rcond, target, rest, isThumb, obj, cfg);
   VERBOSE(0,("\n"));
-
 }
 
-void Obfus_m_segv_8::find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, t_cfg* cfg, t_arm_ins* arm_ins, bool isThumb, t_regset& available, vector<s_bbl*>& vfil)
+void Obfus_m_segv_8::find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, t_cfg* cfg, bool isThumb, t_regset& available, vector<s_bbl*>& vfil)
 {
   short int processi = 2;
   vector<t_arm_ins*> vfilINS;
@@ -1818,7 +1686,7 @@ void Obfus_m_segv_8::find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bb
   while (processi != 0) {
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
     if (processi == 0) {//let us test whether this solution is usable or not ::
       for (int i = 0; i < (int)vfilINS.size(); i++)
         VERBOSE(0, ("\t vfilINS: @G, type:%i, regA: %i, regB: %i, regC: %i, immed: %i",ARM_INS_CADDRESS(vfilINS[i]), ARM_INS_TYPE(vfilINS[i]), ARM_INS_REGA(vfilINS[i]), ARM_INS_REGB(vfilINS[i]), ARM_INS_REGC(vfilINS[i]), ARM_INS_IMMEDIATE(vfilINS[i])));
@@ -1889,28 +1757,19 @@ t_arm_condition_code Obfus_m_segv_8::determine_condition_based_on_flag(t_bbl* bb
   return ARM_CONDITION_AL; // all flags are dead
 }
 
-void Obfus_m_segv_8::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
+void Obfus_m_segv_8::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
-  obfus_final_bbl = bbl;
   //enforceDummyInstructions = true;
   delete_INS_BBL_FromMapping = false; //for small applications it may not find enough distinct instructions to branch to.
-}
 
-void Obfus_m_segv_8::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
-{
-  VERBOSE(0, (" <<<<<  obfus_encode_illegal_address_as_offset >>>>> "));
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   if (RegsetCountRegs(available) < 2)
     FATAL(("At least 2 avail. regs required"));
-
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   vector<s_bbl*> vfil;
   obfus_intersect_available_and_mapped(available, vfil);
@@ -1921,10 +1780,8 @@ void Obfus_m_segv_8::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   s_ins* rsinsA = NULL;
   s_bbl* rbblB = NULL;
   s_ins* rsinsB = NULL;
-  find_rbbl(rbblA, rsinsA, restA, bbl, cfg, arm_ins, isThumb, available, vfil);
-  find_rbbl(rbblB, rsinsB, restB, bbl, cfg, arm_ins, isThumb, available, vfil);
-
-
+  find_rbbl(rbblA, rsinsA, restA, bbl, cfg, isThumb, available, vfil);
+  find_rbbl(rbblB, rsinsB, restB, bbl, cfg, isThumb, available, vfil);
 
   // instead of just choosing a random condition; let us try to use a condition based on any live flags.
   t_arm_condition_code rcond = determine_condition_based_on_flag(bbl);
@@ -1954,27 +1811,19 @@ void Obfus_m_segv_8::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   //t_bbl* bbl_A = BblSplitBlock(bbl, T_INS(BBL_INS_LAST(bbl)), FALSE /* before */); // brand new/empty BBL **fallthrough edge created automatically
 
   //add cond branch
-  insert_ctx_code(bbl,   rbblB, rsinsB,   rcond,   migratedBBL, restB, arm_ins, isThumb, obj, cfg);
+  insert_ctx_code(bbl, rbblB, rsinsB, rcond, target, restB, isThumb, obj, cfg);
   //add branch
-  insert_ctx_code(bbl_A, rbblA, rsinsA,   ARM_CONDITION_AL, migratedBBL, restA, arm_ins, isThumb, obj, cfg);
+  insert_ctx_code(bbl_A, rbblA, rsinsA, ARM_CONDITION_AL, target, restA, isThumb, obj, cfg);
 }
 
-void Obfus_m_segv_9::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
-{
-  obfus_final_bbl = bbl;
-}
-
-void Obfus_m_segv_9::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
+void Obfus_m_segv_9::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   // look for an available register: regB which will hold the ill_addr_encoded_offset.
   t_reg regB = ARM_REG_NONE;
@@ -1991,7 +1840,7 @@ void Obfus_m_segv_9::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   t_arm_ins* ill_ins_encoded = arm_ins; // the AddressProducer will use this instruction to store the ill_addr_encoded_offset.
 
 
-  push_LR_onto_stack(bbl, arm_ins, isThumb);
+  push_LR_onto_stack(bbl, isThumb);
 
   // add BX instruction
   ArmMakeInsForBbl(UncondBranch, Append, arm_ins, bbl, isThumb);
@@ -2024,7 +1873,7 @@ void Obfus_m_segv_9::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
       AddressNullForObject(obj), /* addend */
       T_RELOCATABLE(ill_ins_encoded), /* from */  // address produced here
       AddressNullForObject(obj),  /* from-offset */
-      T_RELOCATABLE(migratedBBL), /* to */ // R00 confirmed
+      target, /* to */ // R00 confirmed
       AddressNullForObject(obj), /* to-offset */
       FALSE, /* hell */
       NULL, /* edge*/
@@ -2034,7 +1883,7 @@ void Obfus_m_segv_9::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
 }
 
-void Obfus_m_segv_9::push_LR_onto_stack(t_bbl* bbl, t_arm_ins* arm_ins, bool isThumb)
+void Obfus_m_segv_9::push_LR_onto_stack(t_bbl* bbl, bool isThumb)
 {
   // In segv_9 we do know if we are dealing with a BX or BLX instruction
   // but the debugger will not be able to know if a BX or BLX was used
@@ -2042,8 +1891,8 @@ void Obfus_m_segv_9::push_LR_onto_stack(t_bbl* bbl, t_arm_ins* arm_ins, bool isT
   // in method segv_10 we use a random BX or a BLX register and jump to it,
   // if a BLX is used, then the LinkRegister (r14) is going to get messed up;
   // so we always have to make a back-up for this register.
+  t_arm_ins* arm_ins;
   ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, 1 << ARM_REG_R14, ARM_CONDITION_AL, isThumb);
-
 }
 
 bool Obfus_m_segv_10::obfus_is_legal_INS(t_bbl* bbl, t_arm_ins* arm_ins)
@@ -2062,12 +1911,6 @@ bool Obfus_m_segv_10::obfus_is_legal_INS(t_bbl* bbl, t_arm_ins* arm_ins)
     return false;
 
   return true;
-}
-
-void Obfus_m_segv_10::start(t_object* obj, t_cfg* cfg, t_regset& possible, t_bbl* bbl, t_cfg_edge* edge, bool transformed_hell_edge_flag, t_uint32 adr_size, t_uint32 constant)
-{
-  obfus_final_bbl = bbl;
-  delete_INS_BBL_FromMapping = false; //for small applications it may not find enough distinct instructions to branch to.
 }
 
 void Obfus_m_segv_10::obfus_INS_Mapping(t_cfg* cfg)
@@ -2115,18 +1958,17 @@ void Obfus_m_segv_10::obfus_INS_Mapping(t_cfg* cfg)
   VERBOSE(0, ("-------- end --------"));
 }
 
-void Obfus_m_segv_10::obfus_encode_illegal_address_as_offset(t_object* obj, t_cfg* cfg, t_regset& possible, t_function* fun)
+void Obfus_m_segv_10::encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
+  delete_INS_BBL_FromMapping = false; //for small applications it may not find enough distinct instructions to branch to.
+
   ASSERT(!obfus_map.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  t_bbl* bbl = obfus_final_bbl;
-  t_arm_ins* arm_ins = T_ARM_INS(BBL_INS_LAST(bbl));
+  t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
-  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
   RegsetSetAddReg(available, ARM_REG_R14);// We may use the LR register because we PUSH it onto stack!!! (**)
   if (RegsetIsEmpty(available))
     FATAL(("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
-  t_bbl* migratedBBL = FUNCTION_BBL_FIRST(fun);
 
   vector<s_bbl*> vfil;
   obfus_intersect_available_and_mapped(available, vfil);
@@ -2139,7 +1981,7 @@ void Obfus_m_segv_10::obfus_encode_illegal_address_as_offset(t_object* obj, t_cf
   while (processi != 0) {
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
     rpair = obfus_get_random_struct(vfil, true);
-    processi = obfus_process_rbbl(cfg, arm_ins, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
+    processi = obfus_process_rbbl(cfg, bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
   }
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
@@ -2147,7 +1989,7 @@ void Obfus_m_segv_10::obfus_encode_illegal_address_as_offset(t_object* obj, t_cf
   VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 
   /* push/preserve LR register, since a BLX can disrupt its value ; debugger will restore it using stack */
-  push_LR_onto_stack(bbl, arm_ins, isThumb);
+  push_LR_onto_stack(bbl, isThumb);
 
   // create dummy 'mov' which will be changed by AddressProducer into an ill_addr_encoded_offset.
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, rsins->B, ARM_REG_NONE, 0, ARM_CONDITION_AL);
@@ -2180,7 +2022,7 @@ void Obfus_m_segv_10::obfus_encode_illegal_address_as_offset(t_object* obj, t_cf
       AddressNullForObject(obj), /* addend */
       T_RELOCATABLE(ill_ins_encoded), /* from */  // address produced here
       AddressNullForObject(obj),  /* from-offset */
-      T_RELOCATABLE(migratedBBL), /* to */ // R00 confirmed
+      target, /* to */ // R00 confirmed
       AddressNullForObject(obj), /* to-offset */
       FALSE, /* hell */
       NULL, /* edge*/

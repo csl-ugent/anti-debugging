@@ -15,7 +15,6 @@
 #define PREFIX_FOR_LINKED_IN_SD_OBJECT "LINKED_IN_SD_OBJECT_"
 #define FINAL_PREFIX_FOR_LINKED_IN_SD_OBJECT PREFIX_FOR_LINKED_IN_SD_OBJECT SD_IDENTIFIER_PREFIX
 #define EF_SELF_DEBUGGING_HELL_EDGE (1<<21) /* Flag to signify this edge was created as a result of self-debugging tranformations */
-#define REGS_STRUCT_OFFSET 2 /* The offset of the pt_regs struct in the t_sd_state struct, expressed in address size */
 #define FL_B FL_SPSR/* Cheat by using the FL_SPSR flag to store whether a we only load/store a byte */
 
 using namespace std;
@@ -35,10 +34,9 @@ SelfDebuggingTransformer::SelfDebuggingTransformer (t_object* obj, t_const_strin
   stm_sym = SymbolTableGetSymbolByName(OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX"Stm");
   nr_of_entries_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "nr_of_entries");
   map_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "addr_mapping");
-  global_state_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "global_state");
 
   /* Check if all symbols were found */
-  ASSERT(init_sym && ldr_sym && str_sym && ldm_sym && stm_sym && map_sym && nr_of_entries_sym && global_state_sym, ("Didn't find all symbols present in the debugger object! Are you sure this object was linked in?"));
+  ASSERT(init_sym && ldr_sym && str_sym && ldm_sym && stm_sym && map_sym && nr_of_entries_sym, ("Didn't find all symbols present in the debugger object! Are you sure this object was linked in?"));
 
   /* The size of a map entry has been set as the first element of the map */
   map_entry_size = SectionGetData32 (T_SECTION(SYMBOL_BASE(map_sym)), SYMBOL_OFFSET_FROM_START(map_sym));
@@ -201,73 +199,9 @@ void SelfDebuggingTransformer::TransformBbl (t_bbl* bbl)
         TransformLdm(bbl, arm_ins);
         break;
       default:
-        TransformUseOfSP(bbl, arm_ins);
+        break;
     }
   }
-}
-
-void SelfDebuggingTransformer::TransformEntrypoint(t_function* fun)
-{
-  /* We will split the entry BBL before its first instruction. The newly split off BBL contains all of its original instructions
-   * and the original BBL (which is still the entrypoint) is now empty, and ready to be populated.
-   */
-  t_bbl* entry = FUNCTION_BBL_FIRST(fun);
-  t_bbl* old_entry = BblSplitBlock(entry, T_INS(BBL_INS_FIRST(entry)), TRUE);
-
-  /* Take care of intraprocedural edges that end on the entrypoint, these should keep the old entrypoint as their tail */
-  t_cfg_edge* edge, *edge_s;
-  BBL_FOREACH_PRED_EDGE_SAFE(entry, edge, edge_s)
-    if (!CfgEdgeIsInterproc(edge))
-      CfgEdgeChangeTail(edge, old_entry);
-
-  /* We will generate the following code for the new entrypoint:
-   * ADR state_reg, global_state (load the global state)
-   * RESTORE REGISTER CONTEXT (this comes down to loading all registers live before entry from the regs struct)
-   * [OPTIONAL] LDR state_reg, [state_reg + (REGS_STRUCT_OFFSET + state_reg#) * adr_size]
-   */
-  t_arm_ins* arm_ins;
-  t_bool isThumb = ArmBblIsThumb(old_entry);
-
-  /* Find out how many dead registers are available, preferably we use a dead register that won't need to be restored */
-  /* First, find out which registers are live upon entry */
-  t_regset regs_used_in_fun = RegsetNew();
-  t_bbl * bbl;
-  FUNCTION_FOREACH_BBL(fun,bbl)
-    RegsetSetUnion(regs_used_in_fun,BBL_REGS_USE(bbl));
-  t_regset live_before = RegsetIntersect(BblRegsLiveBefore(old_entry), regs_used_in_fun);
-
-  t_regset available = RegsetDiff(possible, live_before);
-  t_uint32 nr_of_dead_regs = RegsetCountRegs(available);
-
-  /* The default register is R0, this might get changed if there is another dead register available */
-  t_reg state_reg = ARM_REG_R0;
-  if (nr_of_dead_regs != 0)
-    REGSET_FOREACH_REG(available, state_reg)
-      break;
-
-  /* Produce the address of the state struct */
-  ArmMakeInsForBbl(Mov, Append, arm_ins, entry, isThumb, state_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-  t_reloc* reloc = RelocTableAddRelocToRelocatable(
-      OBJECT_RELOC_TABLE(obj),
-      AddressNullForObject(obj), /* addend */
-      T_RELOCATABLE(arm_ins), /* from */
-      AddressNullForObject(obj),  /* from-offset */
-      SYMBOL_BASE(global_state_sym), /* to */
-      SYMBOL_OFFSET_FROM_START(global_state_sym), /* to-offset */
-      FALSE, /* hell */
-      NULL, /* edge*/
-      NULL, /* corresp */
-      NULL, /* sec */
-      "R00A00+" "\\" WRITE_32);
-  ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
-
-  /* Append the instructions needed to restore the register context */
-  DEBUG(("live before: @X",CPREGSET(FUNCTION_CFG(fun),live_before)));
-  AppendInstructionsToRestoreRegisterContext(entry, live_before, state_reg);
-
-  /* If there were no dead registers available and we had to use R0, load its actual value from the regs struct now */
-  if(nr_of_dead_regs == 0)
-    ArmMakeInsForBbl(Ldr, Append, arm_ins, entry, isThumb, state_reg, state_reg, ARM_REG_NONE, (REGS_STRUCT_OFFSET + state_reg) * adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
 }
 
 void SelfDebuggingTransformer::TransformExit (t_cfg_edge* edge)
@@ -279,18 +213,45 @@ void SelfDebuggingTransformer::TransformExit (t_cfg_edge* edge)
 
 void SelfDebuggingTransformer::TransformIncomingEdgeImpl (t_bbl* bbl, t_cfg_edge* edge)
 {
-  //////////////////////////////////////
-  /////// obfus method selection ///////
-  //////////////////////////////////////
-  obfus->start(obj, cfg, possible, bbl, edge, transformed_hell_edge_flag, adr_size, constant);
-  t_arm_ins* arm_ins;
-  //inserting Noop's here results in error for m_segv_7 (and maybe other as well)!!
-  //ArmMakeInsForBbl(Noop, Prepend, arm_ins, bbl, ArmBblIsThumb(bbl)); // add Nop to make searching in asm easier !!! remove in production !!!
-  //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, ArmBblIsThumb(bbl)); // add Nop to make searching in asm easier !!! remove in production !!!
-  //////////////////////////////////////
-  //////////////////////////////////////
-  //////////////////////////////////////
+  /* We will append the following code:
+   * POSSIBLE CONSTANT ENCODING CODE
+   * [OPTIONAL] ADR LR, return_bbl (if we're dealing with a call edge)
+   * OBFUSCATED MINI-DEBUGGER SIGNALLING CODE
+   */
+  t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
 
+  /* Encode the constant that indicates the position in the mapping of migrated fragments for debugger context */
+  obfus->encode_constant(obj, bbl, available, adr_size, constant);
+
+  /* If we're dealing with a call edge, emulate the call by moving the return address to LR */
+  if (CfgEdgeTestCategoryOr(edge, ET_CALL))
+  {
+    t_arm_ins* arm_ins = NULL;
+    t_bool isThumb = ArmBblIsThumb(bbl);
+    ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R14, ARM_REG_NONE, 0, ARM_CONDITION_AL);
+    t_bbl* bbl_successor = CFG_EDGE_TAIL(CFG_EDGE_CORR(edge));
+    t_reloc* reloc = RelocTableAddRelocToRelocatable(
+        OBJECT_RELOC_TABLE(obj),
+        AddressNullForObject(obj), /* addend */
+        T_RELOCATABLE(arm_ins), /* from */
+        AddressNullForObject(obj),  /* from-offset */
+        T_RELOCATABLE(bbl_successor), /* to */
+        AddressNullForObject(obj), /* to-offset */
+        FALSE, /* hell */
+        NULL, /* edge*/
+        NULL, /* corresp */
+        NULL, /* sec */
+        "R00A00+" "\\" WRITE_32);
+    ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
+  }
+
+  /* Encode the signalling of the mini-debugger */
+  obfus->encode_signalling(obj, cfg, available, bbl, T_RELOCATABLE(CFG_EDGE_TAIL(edge)));
+
+  /* Adjust the incoming edge to go to hell */
+  CfgEdgeChangeTail(edge, CFG_HELL_NODE(cfg));
+  CFG_EDGE_SET_CAT(edge, ET_IPJUMP);
+  CFG_EDGE_SET_FLAGS(edge, CFG_EDGE_FLAGS(edge) | transformed_hell_edge_flag);
 }
 
 void SelfDebuggingTransformer::TransformIncomingTransformedEdgeImpl (t_arm_ins* ins, t_reloc* reloc)
@@ -301,22 +262,13 @@ void SelfDebuggingTransformer::TransformIncomingTransformedEdgeImpl (t_arm_ins* 
 void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge* edge, t_relocatable* to)
 {
   /* We will append the following code:
-   * [OPTIONAL] PUSH state_reg (in case there are no dead registers available, push ARM_REG_R0)
-   * ADR state_reg, global_state (load the t_sd_state struct)
-   * BACKUP REGISTER CONTEXT (this comes down to storing all registers live after exit to the regs struct)
-   * [OPTIONAL] ADR helper1, DESTINATION (this register will contain the destination address or some other controlflow-related value)
-   * [OPTIONAL] STR helper1, [state_reg] (put the destination address into the t_sd_state struct)
-   * [OPTIONAL] ADR helper2, LINK (this register will contain the link address in case the outgoing edge is a ET_CALL)
-   * [OPTIONAL] STR helper2, [state_reg + adr_size] (put the link address into the t_sd_state struct)
-   * [OPTIONAL] POP helper1 (in case there are no dead registers, we also need to store the pushed value of state_reg in the pt_regs struct)
-   * [OPTIONAL] STR helper1, [state_reg + (REGS_STRUCT_OFFSET + state_reg) * adr_size]
-   * BKPT 0x0000
+   * [OPTIONAL] ADR LR, LINK (this register will contain the link address in case the outgoing edge is a ET_CALL)
+   * OBFUSCATED MINI-DEBUGGER SIGNALLING CODE
    */
   t_bool isThumb = ArmBblIsThumb(bbl);
   t_arm_ins* arm_ins, *dest_ins, *link_ins;
   t_arm_ins* ret_ins = T_ARM_INS(BBL_INS_LAST(bbl));
 
-  /* Append the instructions needed to backup the register context */
   t_regset regs_defined_in_fun = RegsetNew();
   t_bbl * bbl2;
   FUNCTION_FOREACH_BBL(BBL_FUNCTION(bbl),bbl2)
@@ -325,45 +277,12 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
   t_regset available = RegsetDiff(possible, live_after);
   t_uint32 nr_of_dead_regs = RegsetCountRegs(available);
 
-  /* Find a dead register to produce the constant in. If we don't find one, push and pop a live reg */
-  t_reg state_reg;
-  if (nr_of_dead_regs == 0)
-  {
-    state_reg = ARM_REG_R0;
-    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << state_reg), ARM_CONDITION_AL, isThumb);
-  }
-  else
-    REGSET_FOREACH_REG(available, state_reg)
-      break;
-
-  /* Produce the address of the t_sd_state struct */
-  ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, state_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-  t_reloc* reloc = RelocTableAddRelocToRelocatable(
-      OBJECT_RELOC_TABLE(obj),
-      AddressNullForObject(obj), /* addend */
-      T_RELOCATABLE(arm_ins), /* from */
-      AddressNullForObject(obj),  /* from-offset */
-      SYMBOL_BASE(global_state_sym), /* to */
-      SYMBOL_OFFSET_FROM_START(global_state_sym), /* to-offset */
-      FALSE, /* hell */
-      NULL, /* edge*/
-      NULL, /* corresp */
-      NULL, /* sec */
-      "R00A00+" "\\" WRITE_32);
-  ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
-  DEBUG(("live after: @X",CPREGSET(BBL_CFG(bbl),live_after)));
-  AppendInstructionsToBackupRegisterContext(bbl, live_after, state_reg);
-
-  /* Choose the two helper registers so they don't conflict with the state_reg */
-  t_reg helper1 = (state_reg == ARM_REG_R0) ? ARM_REG_R1 : ARM_REG_R0;
-  t_reg helper2 = (state_reg == ARM_REG_R2) ? ARM_REG_R3 : ARM_REG_R2;
-
   t_cfg* target_cfg = BBL_CFG(CFG_EDGE_TAIL(edge));
   switch(CFG_EDGE_CAT(edge))
   {
     case ET_CALL:
     {
-      ArmMakeInsForBbl(Mov, Append, link_ins, bbl, isThumb, helper2, ARM_REG_NONE, 0, ARM_CONDITION_AL);
+      ArmMakeInsForBbl(Mov, Append, link_ins, bbl, isThumb, ARM_REG_R14, ARM_REG_NONE, 0, ARM_CONDITION_AL);
 
       /* Get the address that should go into the link register, then fall through */
       t_bbl* bbl_successor = CFG_EDGE_TAIL(CFG_EDGE_CORR(edge));
@@ -380,31 +299,12 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
          NULL, /* sec */
          "R00A00+" "\\" WRITE_32);
       ArmInsMakeAddressProducer(link_ins, 0 /* immediate */, reloc);
-
-      ArmMakeInsForBbl(Str, Append, arm_ins, bbl, isThumb, helper2, state_reg, ARM_REG_NONE, adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
     }
 
     case ET_IPFALLTHRU:
     case ET_IPJUMP:
     {
-      ArmMakeInsForBbl(Mov, Append, dest_ins, bbl, isThumb, helper1, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-
-      /* Get the address that should we should continue executing on, back in the debuggee's context */
-      t_reloc* reloc = RelocTableAddRelocToRelocatable(
-         OBJECT_RELOC_TABLE(obj),
-         AddressNullForObject(obj), /* addend */
-         T_RELOCATABLE(dest_ins), /* from */
-         AddressNullForObject(obj),  /* from-offset */
-         T_RELOCATABLE(to), /* to */
-         AddressNullForObject(obj), /* to-offset */
-         FALSE, /* hell */
-         NULL, /* edge*/
-         NULL, /* corresp */
-         NULL, /* sec */
-         "R00A00+" "\\" WRITE_32);
-      ArmInsMakeAddressProducer(dest_ins, 0 /* immediate */, reloc);
-
-      ArmMakeInsForBbl(Str, Append, arm_ins, bbl, isThumb, helper1, state_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
+      /* Do nothing anymore */
       break;
     }
 
@@ -412,10 +312,11 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
     {
       if (RegsetCountRegs(ARM_INS_REGS_DEF(ret_ins)) == 1 && RegsetIn(ARM_INS_REGS_DEF(ret_ins), ARM_REG_R15))
       {
-        /* If the last instruction sets the PC, it's still the original return instruction and should be replaced */
+        /* If the last instruction sets the PC, it's still the original return instruction and should be killed.
+         * Also, set the 'to' relocatable to the mapping section, to signify a return to the mini-debugger.
+         */
         InsKill (T_INS(ret_ins));
-        ArmMakeInsForBbl(Mov, Append, dest_ins, bbl, isThumb, helper1, ARM_REG_NONE, 1, ARM_CONDITION_AL);
-        ArmMakeInsForBbl(Str, Append, arm_ins, bbl, isThumb, helper1, state_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
+        to = T_RELOCATABLE(map_sec);
       }
       break;
     }
@@ -443,81 +344,8 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
     CfgEdgeChangeTail(edge, FunctionGetExitBlock(BBL_FUNCTION(bbl)));/* TODO: What if there's no exit block? */
   }
 
-  if (nr_of_dead_regs == 0)
-  {
-    /* Pop the previously pushed value of the state_reg into the first helper and store it in the pt_regs struct */
-    ArmMakeInsForBbl(Pop, Append, arm_ins, bbl, isThumb, (1 << helper1), ARM_CONDITION_AL, isThumb);
-    ArmMakeInsForBbl(Str, Append, arm_ins, bbl, isThumb, helper1, state_reg, ARM_REG_NONE, (REGS_STRUCT_OFFSET + state_reg) * adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-  }
-
-  /* Create the breakpoint to exit back to the protected application */
-  ArmMakeInsForBbl(Bkpt, Append, arm_ins, bbl, isThumb);
-}
-
-void SelfDebuggingTransformer::AppendInstructionsToRestoreRegisterContext(t_bbl* bbl, t_regset regset, t_reg state_reg)
-{
-  /* We will append the following code:
-   * LDR R#, [state_reg + (REGS_STRUCT_OFFSET + R#) * adr_size] (for every register that was live before!)
-   */
-  t_bool isThumb = ArmBblIsThumb(bbl);
-  t_arm_ins* arm_ins;
-
-  /* Don't restore SP or PC */
-  RegsetSetSubReg(regset, ARM_REG_R13);
-  RegsetSetSubReg(regset, ARM_REG_R15);
-
-  t_reg reg;
-  REGSET_FOREACH_REG(regset, reg)
-  {
-    if(reg != state_reg)
-    {
-      switch(ArmRegisterGetType(reg))
-      {
-        case REG_TYPE_INT:
-          ArmMakeInsForBbl(Ldr, Append, arm_ins, bbl, isThumb, reg, state_reg, ARM_REG_NONE, (REGS_STRUCT_OFFSET + reg) * adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-          break;
-        case REG_TYPE_FP:
-          //TODO: Figure out what to do with this!
-          //ArmMakeInsForBbl(Vldr, Append, arm_ins, bbl, isThumb, reg, state_reg, ARM_REG_NONE, (REGS_STRUCT_OFFSET + reg) * adr_size, ARM_CONDITION_AL, TRUE, TRUE);
-          break;
-        case REG_TYPE_FLAG:
-          VERBOSE(0, ("%s error not implemented yet",ArmRegisterName(reg)));
-      }
-    }
-  }
-}
-
-void SelfDebuggingTransformer::AppendInstructionsToBackupRegisterContext(t_bbl* bbl, t_regset regset, t_reg state_reg)
-{
-  /* We will append the following code: (state_reg already contains the address of the t_sd_state struct)
-   * STR R#, [state_reg + (REGS_STRUCT_OFFSET + R#) * adr_size] (for every register that is live after!)
-   */
-  t_bool isThumb = ArmBblIsThumb(bbl);
-  t_arm_ins* arm_ins;
-
-  /* Don't backup SP or PC */
-  RegsetSetSubReg(regset, ARM_REG_R13);
-  RegsetSetSubReg(regset, ARM_REG_R15);
-
-  t_reg reg;
-  REGSET_FOREACH_REG(regset, reg)
-  {
-    if(reg != state_reg)
-    {
-      switch(ArmRegisterGetType(reg))
-      {
-        case REG_TYPE_INT:
-          ArmMakeInsForBbl(Str, Append, arm_ins, bbl, isThumb, reg, state_reg, ARM_REG_NONE, (REGS_STRUCT_OFFSET + reg) * adr_size, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-          break;
-        case REG_TYPE_FP:
-          //TODO: Figure out what to do with this!
-          //ArmMakeInsForBbl(Vstr, Append, arm_ins, bbl, isThumb, reg, state_reg, ARM_REG_NONE, (REGS_STRUCT_OFFSET + reg) * adr_size, ARM_CONDITION_AL, TRUE, TRUE);
-          break;
-        case REG_TYPE_FLAG:
-          VERBOSE(0, ("%s error not implemented yet",ArmRegisterName(reg)));
-      }
-    }
-  }
+  /* Encode the signalling of the mini-debugger */
+  obfus->encode_signalling(obj, cfg, available, bbl, to);
 }
 
 void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
@@ -557,15 +385,15 @@ void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* The Ldr will be replaced by the following code:
    * PUSH ALL_LIVE_CALLER_SAVED
-   * PUSH {[OPT] base, [OPT] PC} (we'll push the PC if necessary to align the stack, and push the base if it's not SP)
+   * PUSH {base, [OPT] PC} (we'll push the PC if necessary to align the stack)
    * [OPTIONAL] MOV R1, immediate (this immediate might be a register or a constant, only move register if it isn't there yet)
-   * MOV R0, SP OR ADR R0, global_state.regs.uregs[13] (now we have the address of the base address as first argument)
+   * MOV R0, SP (now we have the address of the base address as first argument)
    * MOV R2, FLAGS (put the flags of the original instruction in R2 as third argument)
    * [OPTIONAL] MRS cond_reg
    * BL function_ldr
    * [OPTIONAL] MSR cond_reg
-   * MOV target, R0
    * [OPTIONAL] POP {base} (in case base and target are the same register or base is R13, we won't do a pop)
+   * MOV target, R0
    * [OPTIONAL] ADD SP, SP, #4 (if alignment requires it)
    * POP ALL_LIVE_CALLER_SAVED
    */
@@ -590,21 +418,11 @@ void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
   t_uint32 regs = RegsetToUint32(int_to_push);
   ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
-  /* The first argument is a pointer to the base address. If the base is the stack pointer we only have to align (getting the pointer into
-   * r0 will taken care of later on. For any other register we put it on the stack so we can take its address. Take care of alignment.
-   */
-  if (base == ARM_REG_R13)
-  {
-    if (!aligned)
-      ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << ARM_REG_R15), ARM_CONDITION_AL, isThumb);
-  }
+  /* The first argument is a pointer to the base address. We put the register on the stack so we can take its address. Take care of alignment. */
+  if (aligned)
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base) | (1 << ARM_REG_R15), ARM_CONDITION_AL, isThumb);
   else
-  {
-    if (aligned)
-      ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base) | (1 << ARM_REG_R15), ARM_CONDITION_AL, isThumb);
-    else
-      ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base), ARM_CONDITION_AL, isThumb);
-  }
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base), ARM_CONDITION_AL, isThumb);
 
   /* As second argument we pass the offset (which is either encoded as an immediate or present in a register) */
   if (ARM_INS_FLAGS(orig_ins) & FL_IMMED)
@@ -615,30 +433,8 @@ void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
   else if (immediate != ARM_REG_R1)
     ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R1, immediate, 0, ARM_CONDITION_AL);
 
-  /* We want the address of the base register in r0, so we can write to it if necessary. If the base is the stack pointer,
-   * we will put the address of the stack pointer in the global_state.regs struct into r0. If not, the contents of the base
-   * register have been pushed are now at the top of the stack. Moving the value of the stack pointer to r0 should suffice.
-   */
-  if (base == ARM_REG_R13)
-  {
-    /* Produce the address of the stored SP in the state struct */
-    ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-    t_reloc* reloc = RelocTableAddRelocToRelocatable(
-        OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), /* addend */
-        T_RELOCATABLE(arm_ins), /* from */
-        AddressNullForObject(obj),  /* from-offset */
-        SYMBOL_BASE(global_state_sym), /* to */
-        AddressAdd(SYMBOL_OFFSET_FROM_START(global_state_sym), AddressNewForObject(obj, 16 * adr_size)), /* to-offset */
-        FALSE, /* hell */
-        NULL, /* edge*/
-        NULL, /* corresp */
-        NULL, /* sec */
-        "R00A00+" "\\" WRITE_32);
-    ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
-  }
-  else
-    ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, ARM_REG_R13, 0, ARM_CONDITION_AL);
+  /* We want the address of the base register in r0, so we can write to it if necessary */
+  ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, ARM_REG_R13, 0, ARM_CONDITION_AL);
 
   /* The third argument are the flags */
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R2, ARM_REG_NONE, ARM_INS_FLAGS(orig_ins), ARM_CONDITION_AL);
@@ -654,27 +450,45 @@ void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
   ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
   /* Take care of alignment if necessary */
-  if (base == ARM_REG_R13)
-  {
-    if (!aligned)
-      ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, adr_size, ARM_CONDITION_AL);/* Reclaim the stack space */
-  }
-  else if (base == target)
+  if (target != ARM_REG_R13)
   {
     if (aligned)
-      ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, 2 * adr_size, ARM_CONDITION_AL);/* Reclaim the stack space */
-    else
       ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, adr_size, ARM_CONDITION_AL);/* Reclaim the stack space */
   }
-  else if (aligned)
-    ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, adr_size, ARM_CONDITION_AL);/* Reclaim the stack space */
 
-  /* Pop the - potentially - changed register back (unless when it's the stack pointer or the target) */
-  if ((base != ARM_REG_R13) && (base != target))
+  t_reg tmp_reg = (target == ARM_REG_R1) ? ARM_REG_R2 : ARM_REG_R1;
+  if (base == ARM_REG_R0)
+  {
+    /* Put temporary base value in place */
+    if (base != target)
+      ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R0, tmp_reg, 0, ARM_CONDITION_AL);
+
+    /* Move the result into the target register */
+    ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, target, ARM_REG_R0, 0, ARM_CONDITION_AL);
+
+    /* Pop the - potentially - changed base register back, into a temporary register */
+    ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, (1 << tmp_reg), ARM_CONDITION_AL, isThumb);
+  }
+  else if (base == ARM_REG_R13)
+  {
+    /* Put temporary base value in place */
+    if (base != target)
+      ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, tmp_reg, 0, ARM_CONDITION_AL);
+
+    /* Move the result into the target register */
+    ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, target, ARM_REG_R0, 0, ARM_CONDITION_AL);
+
+    /* Pop the - potentially - changed base register back, into a temporary register */
+    ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, (1 << tmp_reg), ARM_CONDITION_AL, isThumb);
+  }
+  else
+  {
+    /* Move the result into the target register */
+    ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, target, ARM_REG_R0, 0, ARM_CONDITION_AL);
+
+    /* Pop the - potentially - changed base register back */
     ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, (1 << base), ARM_CONDITION_AL, isThumb);
-
-  /* Move the result into the target register (we're prepending, so this instruction will be executed first in this BBL */
-  ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, target, ARM_REG_R0, 0, ARM_CONDITION_AL);
+  }
 
   /* Restore the flags */
   if (save_cond)
@@ -725,11 +539,11 @@ void SelfDebuggingTransformer::TransformStr(t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* The Str will be replaced by the following code:
    * PUSH ALL_LIVE_CALLER_SAVED
-   * PUSH {[OPT] base, [OPT] PC} (we'll push the PC if necessary to align the stack, and push the base if it's not SP)
+   * PUSH {base, [OPT] PC} (we'll push the PC if necessary to align the stack)
    * [OPTIONAL] MOV [R1 or R3], immediate (only if the immediate value is in R2 and we need to move it before putting the value in there)
    * [OPTIONAL] MOV R2, value (only move to this register if it isn't already in the register)
    * [OPTIONAL] MOV R1, immediate (this immediate might be a register or a constant, only move if its necessary)
-   * MOV R0, SP OR ADR R0, global_state.regs.uregs[13] (now we have the address of the base address as first argument)
+   * MOV R0, SP (now we have the address of the base address as first argument)
    * MOV R3, FLAGS (put the flags of the original instruction in R2 as third argument)
    * [OPTIONAL] MRS cond_reg
    * BL function_str
@@ -758,21 +572,11 @@ void SelfDebuggingTransformer::TransformStr(t_bbl* bbl, t_arm_ins* orig_ins)
   t_uint32 regs = RegsetToUint32(int_to_push);
   ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
-  /* The first argument is a pointer to the base address. If the base is the stack pointer we only have to align (getting the pointer into
-   * r0 will taken care of later on. For any other register we put it on the stack so we can take its address. Take care of alignment.
-   */
-  if (base == ARM_REG_R13)
-  {
-    if (!aligned)
-      ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << ARM_REG_R15), ARM_CONDITION_AL, isThumb);
-  }
+  /* The first argument is a pointer to the base address. We put the register on the stack so we can take its address. Take care of alignment. */
+  if (aligned)
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base) | (1 << ARM_REG_R15), ARM_CONDITION_AL, isThumb);
   else
-  {
-    if (aligned)
-      ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base) | (1 << ARM_REG_R15), ARM_CONDITION_AL, isThumb);
-    else
-      ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base), ARM_CONDITION_AL, isThumb);
-  }
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << base), ARM_CONDITION_AL, isThumb);
 
   /* The third argument is the value to be stored */
   if (value != ARM_REG_R2)
@@ -809,26 +613,7 @@ void SelfDebuggingTransformer::TransformStr(t_bbl* bbl, t_arm_ins* orig_ins)
    * we will put the address of the stack pointer in the global_state.regs struct into r0. If not, the contents of the base
    * register have been pushed are now at the top of the stack. Moving the value of the stack pointer to r0 should suffice.
    */
-  if (base == ARM_REG_R13)
-  {
-    /* Produce the address of the stored SP in the state struct */
-    ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-    t_reloc* reloc = RelocTableAddRelocToRelocatable(
-        OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), /* addend */
-        T_RELOCATABLE(arm_ins), /* from */
-        AddressNullForObject(obj),  /* from-offset */
-        SYMBOL_BASE(global_state_sym), /* to */
-        AddressAdd(SYMBOL_OFFSET_FROM_START(global_state_sym), AddressNewForObject(obj, 16 * adr_size)), /* to-offset */
-        FALSE, /* hell */
-        NULL, /* edge*/
-        NULL, /* corresp */
-        NULL, /* sec */
-        "R00A00+" "\\" WRITE_32);
-    ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
-  }
-  else
-    ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, ARM_REG_R13, 0, ARM_CONDITION_AL);
+  ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, ARM_REG_R13, 0, ARM_CONDITION_AL);
 
   /* The fourth argument is the flags */
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R3, ARM_REG_NONE, ARM_INS_FLAGS(orig_ins), ARM_CONDITION_AL);
@@ -843,10 +628,23 @@ void SelfDebuggingTransformer::TransformStr(t_bbl* bbl, t_arm_ins* orig_ins)
   /* Restore all live registers */
   ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
-  /* Take care of alignment if necessary, and pop the - potentially - changed register back (unless when it's the stack pointer!) */
-  if ((aligned && base != ARM_REG_R13) || (!aligned && base == ARM_REG_R13))
+  /* Take care of alignment if necessary */
+  if (aligned)
     ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, adr_size, ARM_CONDITION_AL);/* Reclaim the stack space */
-  if (base != ARM_REG_R13)
+
+  /* Move the result into the target register (we're prepending, so this instruction will be executed first in this BBL */
+  if (base == ARM_REG_R13)
+  {
+    t_reg tmp_reg = ARM_REG_R1;
+
+    /* Move SP from temporary register to actual SP register */
+    ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, tmp_reg, 0, ARM_CONDITION_AL);
+
+    /* Pop the - potentially - changed base register back into a temporary register */
+    ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, (1 << tmp_reg), ARM_CONDITION_AL, isThumb);
+  }
+  else
+    /* Pop the - potentially - changed base register back */
     ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, (1 << base), ARM_CONDITION_AL, isThumb);
 
   /* Restore the flags */
@@ -934,12 +732,9 @@ void SelfDebuggingTransformer::TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins)
   t_uint32 space_to_reserve = adr_size * (aligned ? nr_of_regs_to_load : nr_of_regs_to_load + 1);
   ArmMakeInsForBbl(Sub, Append, arm_ins, bbl, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, space_to_reserve, ARM_CONDITION_AL);
 
-  /* Move the address from which we want to load into r0 if necessary. If it's in R13, the TransformUseOfSP will take care of it */
+  /* Move the address from which we want to load into r0 if necessary */
   if (addr != ARM_REG_R0)
-  {
     ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, addr, 0, ARM_CONDITION_AL);
-    TransformUseOfSP (bbl, arm_ins);
-  }
 
   /* Now put the SP in r1 so it can serve as the second argument */
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R1, ARM_REG_R13, 0, ARM_CONDITION_AL);
@@ -956,10 +751,7 @@ void SelfDebuggingTransformer::TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* If the base register has to be updated, do this now, unless the it was one of the loaded registers */
   if ((ARM_INS_FLAGS(orig_ins) & FL_WRITEBACK) && !RegsetIn(regs_to_load, addr))
-  {
     ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, addr, addr, ARM_REG_NONE, adr_size * nr_of_regs_to_load, ARM_CONDITION_AL);
-    TransformUseOfSP (bbl_split, arm_ins);
-  }
 
   /* Restore all live registers */
   ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, regs, ARM_CONDITION_AL, isThumb);
@@ -972,22 +764,6 @@ void SelfDebuggingTransformer::TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins)
   {
     RegsetSetSubReg(regs_to_load, ARM_REG_R15);
     ArmMakeInsForBbl(Str, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R0, ARM_REG_R1, ARM_REG_NONE, 0, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-
-    /* Produce the address of the 'address' field in the state struct */
-    ArmMakeInsForBbl(Mov, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R1, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-    t_reloc* reloc = RelocTableAddRelocToRelocatable(
-        OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), /* addend */
-        T_RELOCATABLE(arm_ins), /* from */
-        AddressNullForObject(obj),  /* from-offset */
-        SYMBOL_BASE(global_state_sym), /* to */
-        SYMBOL_OFFSET_FROM_START(global_state_sym), /* to-offset */
-        FALSE, /* hell */
-        NULL, /* edge*/
-        NULL, /* corresp */
-        NULL, /* sec */
-        "R00A00+" "\\" WRITE_32);
-    ArmInsMakeAddressProducer(arm_ins, 0 /* immediate */, reloc);
 
     ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, 1 << ARM_REG_R0, ARM_CONDITION_AL, isThumb);
   }
@@ -1072,10 +848,7 @@ void SelfDebuggingTransformer::TransformStm(t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* If the base register has to be updated, do this now */
   if (ARM_INS_FLAGS(orig_ins) & FL_WRITEBACK)
-  {
     ArmMakeInsForBbl(Sub, Append, arm_ins, bbl, isThumb, addr, addr, ARM_REG_NONE, adr_size * nr_of_regs_to_store, ARM_CONDITION_AL);
-    TransformUseOfSP (bbl, arm_ins);
-  }
 
   /* Backup all live registers */
   t_uint32 regs = RegsetToUint32(int_to_push);
@@ -1087,12 +860,9 @@ void SelfDebuggingTransformer::TransformStm(t_bbl* bbl, t_arm_ins* orig_ins)
     ArmMakeInsForBbl(Sub, Append, arm_ins, bbl, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, adr_size, ARM_CONDITION_AL);
   ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, RegsetToUint32(regs_to_store), ARM_CONDITION_AL, isThumb);
 
-  /* Move the address to which we want to store into r0 if necessary. If it's in R13, the TransformUseOfSP will take care of it */
+  /* Move the address to which we want to store into r0 if necessary */
   if (addr != ARM_REG_R0)
-  {
     ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R0, addr, 0, ARM_CONDITION_AL);
-    TransformUseOfSP (bbl, arm_ins);
-  }
 
   /* Now put the SP in r1 so it can serve as the second argument */
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, ARM_REG_R1, ARM_REG_R13, 0, ARM_CONDITION_AL);
@@ -1123,118 +893,6 @@ void SelfDebuggingTransformer::TransformStm(t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* Remove the instruction now that it has been replaced by a function call */
   InsKill(T_INS(orig_ins));
-}
-
-void SelfDebuggingTransformer::TransformUseOfSP(t_bbl* bbl, t_arm_ins* arm_ins)
-{
-  t_bool isThumb = ArmBblIsThumb(bbl);
-  t_arm_ins* tmp_ins;
-
-  /* If the SP is the destination, we will store its new value in the global state */
-  if (ARM_INS_REGA(arm_ins) == ARM_REG_R13)
-  {
-    t_regset available = RegsetDiff(possible, InsRegsLiveAfter(T_INS(arm_ins)));
-    t_uint32 nr_of_dead_regs = RegsetCountRegs(available);
-
-    /* Select the registers to use and push/pop them if necessary */
-    t_reg sp_reg = ARM_REG_NONE;
-    t_reg adr_reg = ARM_REG_NONE;
-    if (nr_of_dead_regs == 0)
-    {
-      sp_reg = ARM_REG_R0;
-      adr_reg = ARM_REG_R1;
-
-      ArmMakeInsForIns(Push, Before, tmp_ins, arm_ins, isThumb, (1 << sp_reg) | (1 << adr_reg), ARM_CONDITION_AL, isThumb);
-      ArmMakeInsForIns(Pop, After, tmp_ins, arm_ins, isThumb, (1 << sp_reg) | (1 << adr_reg), ARM_CONDITION_AL, isThumb);
-    }
-    else if (nr_of_dead_regs == 1)
-    {
-      sp_reg = ARM_REG_R0;
-      REGSET_FOREACH_REG(available, adr_reg)
-        if(adr_reg != sp_reg) break;
-
-      ArmMakeInsForIns(Push, Before, tmp_ins, arm_ins, isThumb, (1 << sp_reg), ARM_CONDITION_AL, isThumb);
-      ArmMakeInsForIns(Pop, After, tmp_ins, arm_ins, isThumb, (1 << sp_reg), ARM_CONDITION_AL, isThumb);
-    }
-    else
-    {
-      REGSET_FOREACH_REG(available, sp_reg)
-        break;
-      REGSET_FOREACH_REG(available, adr_reg)
-        if(adr_reg != sp_reg) break;
-    }
-
-    /* Store the adapted SP value to the state struct */
-    ArmMakeInsForIns(Str, After, tmp_ins, arm_ins, isThumb, sp_reg, adr_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-
-    /* Produce the address of the stored SP in the state struct */
-    ArmMakeInsForIns(Mov, After, tmp_ins, arm_ins, isThumb, adr_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-    t_reloc* reloc = RelocTableAddRelocToRelocatable(
-        OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), /* addend */
-        T_RELOCATABLE(tmp_ins), /* from */
-        AddressNullForObject(obj),  /* from-offset */
-        SYMBOL_BASE(global_state_sym), /* to */
-        AddressAdd(SYMBOL_OFFSET_FROM_START(global_state_sym), AddressNewForObject(obj, 16 * adr_size)), /* to-offset */
-        FALSE, /* hell */
-        NULL, /* edge*/
-        NULL, /* corresp */
-        NULL, /* sec */
-        "R00A00+" "\\" WRITE_32);
-    ArmInsMakeAddressProducer(tmp_ins, 0 /* immediate */, reloc);
-
-    /* Replace the destination register */
-    ARM_INS_SET_REGA(arm_ins, sp_reg);
-  }
-
-  /* If SP is one of the source operands, we will load find a register to load the value of SP in the global state to */
-  if (ARM_INS_REGB(arm_ins) == ARM_REG_R13 || ARM_INS_REGC(arm_ins) == ARM_REG_R13)
-  {
-    t_regset available = RegsetDiff(possible, InsRegsLiveBefore(T_INS(arm_ins)));
-    t_uint32 nr_of_dead_regs = RegsetCountRegs(available);
-
-    /* Select the register to use and push/pop if necessary */
-    t_reg sp_reg = ARM_REG_NONE;
-    if (nr_of_dead_regs == 0)
-    {
-      sp_reg = ARM_REG_R0;
-
-      ArmMakeInsForIns(Push, Before, tmp_ins, arm_ins, isThumb, (1 << sp_reg), ARM_CONDITION_AL, isThumb);
-      ArmMakeInsForIns(Pop, After, tmp_ins, arm_ins, isThumb, (1 << sp_reg), ARM_CONDITION_AL, isThumb);
-    }
-    else
-      REGSET_FOREACH_REG(available, sp_reg)
-        break;
-
-    /* Produce the address of the stored SP in the state struct */
-    ArmMakeInsForIns(Mov, Before, tmp_ins, arm_ins, isThumb, sp_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL);
-    t_reloc* reloc = RelocTableAddRelocToRelocatable(
-        OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), /* addend */
-        T_RELOCATABLE(tmp_ins), /* from */
-        AddressNullForObject(obj),  /* from-offset */
-        SYMBOL_BASE(global_state_sym), /* to */
-        AddressAdd(SYMBOL_OFFSET_FROM_START(global_state_sym), AddressNewForObject(obj, 16 * adr_size)), /* to-offset */
-        FALSE, /* hell */
-        NULL, /* edge*/
-        NULL, /* corresp */
-        NULL, /* sec */
-        "R00A00+" "\\" WRITE_32);
-    ArmInsMakeAddressProducer(tmp_ins, 0 /* immediate */, reloc);
-
-    /* Load the current SP value */
-    ArmMakeInsForIns(Ldr, Before, tmp_ins, arm_ins, isThumb, sp_reg, sp_reg, ARM_REG_NONE, 0, ARM_CONDITION_AL, TRUE, TRUE, FALSE);
-
-    /* Replace the source register(s) */
-    if (ARM_INS_REGB(arm_ins) == ARM_REG_R13)
-        ARM_INS_SET_REGB(arm_ins, sp_reg);
-    if (ARM_INS_REGC(arm_ins) == ARM_REG_R13)
-        ARM_INS_SET_REGC(arm_ins, sp_reg);
-  }
-
-  /* Sometimes this function will create no-ops. Kill them */
-  if (ArmInsIsNOOP(arm_ins))
-    InsKill(T_INS(arm_ins));
 }
 
 static t_bool sd_split_helper_IsStartOfPartition(t_bbl* bbl)
@@ -1422,9 +1080,7 @@ void SelfDebuggingTransformer::TransformObject()
 
         //////////////////////////////////////////////////////
         obfus->generate_addr_mapping(obj, fun, offset, map_sec);
-        obfus->obfus_encode_illegal_address_as_offset(obj, cfg, possible, fun);
         //////////////////////////////////////////////////////
-
       }
     }
   }
@@ -1444,12 +1100,9 @@ void SelfDebuggingTransformer::TransformObject()
     SectionSetData32 (map_sec, AddressNewForObject(obj, offset), constants[iii]);
   }
 
-
   ////////////////////////////////////////
   obfus->postProcess(cfg);
   ////////////////////////////////////////
-
-
 
   STATUS(STOP, ("Anti Debugging"));
 }
