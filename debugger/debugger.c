@@ -393,7 +393,7 @@ static uintptr_t decode_unobfuscated_address(struct pt_regs* regs)
 
     if(loop.key == id)
     {
-      LOG("Found value: %"PRIxPTR" and mapping sec: %p\n", loop.value, DIABLO_Debugger_addr_mapping);
+      LOG("Found value: %"PRIxPTR" for id: %"PRIxPTR"\n", loop.value, id);
       if (IS_MUTILATED_ADDR_MAPPING) {
         uintptr_t ret = (loop.value ^ (uintptr_t)DIABLO_Debugger_addr_mapping);
         ret ^= MUTILATION_MASK_ADR_MAP;
@@ -641,7 +641,10 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid, unsigned
   {
     /* If the address is not OK, fuck up execution by continuing at next instruction address */
     if (!verify_fragment_destination(destination_address))
+    {
+      LOG("Verification failed!\n");
       destination_address = 0;
+    }
   }
 
   /* If the destination address is that of the mapping, it's a return */
@@ -672,6 +675,7 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid, unsigned
   }
 
   /* Do actual context switch */
+  LOG("Going to switch to: %lx\n", regs.uregs[15]);
   do_switch(&regs);
 }
 
