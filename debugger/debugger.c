@@ -383,7 +383,7 @@ static uintptr_t decode_unobfuscated_address(struct pt_regs* regs)
 {
   /* Get the constant from the stack and adjust the stack pointer to 'pop' it */
   uintptr_t id;
-  read_tracee_mem(&id, sizeof(id), regs->uregs[13]);
+  read_tracee_mem(&id, addr_size, regs->uregs[13]);
   regs->uregs[13] += addr_size;
 
   /* Look up the the destination in the map */
@@ -447,7 +447,7 @@ static uintptr_t decode_obfuscated_address1(struct pt_regs* regs)
 
   //lets extract hex instruction pointed to by PC
   uintptr_t pcins;
-  read_tracee_mem(&pcins, sizeof(pcins), regs->uregs[15]);
+  read_tracee_mem(&pcins, addr_size, regs->uregs[15]);
   if (DO_ALL_LOGS) {LOG("pcins %02X\n", pcins);}
   // find register which is the numerator : bits 16, 17, 18 & 19.
   unsigned int regN = (pcins & 0x000F0000) >> 16;
@@ -479,7 +479,7 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
 
   //lets extract hex instruction pointed to by PC
   uintptr_t pcins;
-  read_tracee_mem(&pcins, sizeof(pcins), regs->uregs[15]);
+  read_tracee_mem(&pcins, addr_size, regs->uregs[15]);
   if (DO_ALL_LOGS) {LOG("pcins %02X\n", pcins);}
 
   unsigned int regB = 255;
@@ -567,7 +567,7 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
       */
       // pop LR from stack:
       uintptr_t LRreg;
-      read_tracee_mem(&LRreg, sizeof(LRreg), regs->uregs[13]);
+      read_tracee_mem(&LRreg, addr_size, regs->uregs[13]);
       regs->uregs[13] += addr_size; //fix stack pointer
       regs->uregs[14] = LRreg; //backup the LR register
       if (DO_ALL_LOGS) {LOG("popped LRreg: %02X\n", LRreg);}
