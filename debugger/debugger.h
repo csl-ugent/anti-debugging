@@ -11,6 +11,7 @@
 /* C standard headers */
 #include <errno.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

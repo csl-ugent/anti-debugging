@@ -50,16 +50,6 @@ static const bool ADDRESS_OBFUSCATION = true;
 static const bool IS_MUTILATED_ADDR_MAPPING = true;
 static const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
 
-///////////////////////////////////////////////////////
-//// notes:
-static const bool FUNC_LOGS = false;
-static const bool DO_ALL_LOGS = true;
-////        when __func__ LOGs are enabled(1), then running bzip2 will fail for some reason.
-////        thus if you get strange program behavior, set this variable to 0  !!! in producation this should be 0; furthermore disable diablo logging entirely !!!
-///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
-
 /* The size of an address */
 static size_t addr_size = sizeof(void*);
 
@@ -374,7 +364,7 @@ static __attribute__((noreturn)) void return_to_debug_main()
   close_debugger();
 }
 
-static uintptr_t decode_unobfuscated_address(struct pt_regs* regs)
+static uintptr_t decode_address_unobfuscated(struct pt_regs* regs)
 {
   /* Get the constant from the stack and adjust the stack pointer to 'pop' it */
   uintptr_t id;
@@ -429,7 +419,7 @@ static bool verify_fragment_destination(uintptr_t dest)
   return false;
 }
 
-static uintptr_t decode_obfuscated_address1(struct pt_regs* regs)
+static uintptr_t decode_address_fpe(struct pt_regs* regs)
 {
   /*
     This code is very sensitive to your ARM version.
@@ -437,27 +427,22 @@ static uintptr_t decode_obfuscated_address1(struct pt_regs* regs)
     This is very relative to how your ARM machine instructions are encoded.
     Please adjust this code if it's unaligned with your situation.
   */
-  if (FUNC_LOGS) {LOG("\n------- %s -------\n", "decode_obfuscated_address1");}
-  volatile uintptr_t dest=0;
 
   //lets extract hex instruction pointed to by PC
+  uintptr_t pc = regs->uregs[15];  //from the address where SIGSEGV occured
   uintptr_t pcins;
-  read_tracee_mem(&pcins, addr_size, regs->uregs[15]);
-  if (DO_ALL_LOGS) {LOG("pcins %02X\n", pcins);}
+  read_tracee_mem(&pcins, addr_size, pc);
+
   // find register which is the numerator : bits 16, 17, 18 & 19.
   unsigned int regN = (pcins & 0x000F0000) >> 16;
-  if (DO_ALL_LOGS) {LOG("regN(umerator): %i\n", regN);}
 
   //we have to find *to*, the destination address which is encoded into the ill_addr.
-  uintptr_t PCval = regs->uregs[15];  //from the address where SIGSEGV occured
   uintptr_t ill_addr_encoded = regs->uregs[regN];
 
-  if (DO_ALL_LOGS) {LOG("PCval: %02X, regN: %02X \n", PCval, ill_addr_encoded);}
-  dest = ill_addr_encoded ^ 0xffffffff ^ PCval;
-  return dest;
+  return ill_addr_encoded ^ 0xffffffff ^ pc;
 }
 
-static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
+static uintptr_t decode_address_segv_RW(struct pt_regs* regs, uintptr_t fault_address)
 {
   /*
     This code is very sensitive to your ARM version.
@@ -465,22 +450,16 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
     This is very relative to how your ARM machine instructions are encoded.
     Please adjust this code if it's unaligned with your situation.
   */
-  if (FUNC_LOGS) {LOG("\n------- %s -------\n", "decode_obfuscated_address2");}
-  volatile uintptr_t dest=0;
 
   //update: we no longer have to push the register which contains ill_addr, we can extract it from hex value of PC pointer.
-  //uintptr_t regB = ptrace(PTRACE_PEEKTEXT, DIABLO_Debugger_global_state.recv_pid, (void*)(regs->uregs[13]), NULL); //get regB from stack
   //regs->uregs[13] += addr_size; //pop from stack
 
   //lets extract hex instruction pointed to by PC
+  uintptr_t pc = regs->uregs[15];  //from the address where SIGSEGV occured
   uintptr_t pcins;
-  read_tracee_mem(&pcins, addr_size, regs->uregs[15]);
-  if (DO_ALL_LOGS) {LOG("pcins %02X\n", pcins);}
+  read_tracee_mem(&pcins, addr_size, pc);
 
-  unsigned int regB = 255;
   int immed = 255;
-  uintptr_t ill_addr_encoded = 255;
-  uintptr_t PCval = regs->uregs[15];  //from the address where SIGSEGV occured
   unsigned int opcode = (pcins & 0xFFF00000) >> 20;
   unsigned int MASK = 0xffffffff;
   switch (opcode) {
@@ -498,9 +477,7 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
     case 0xE5F: // LDRB + writeback pre-index
     case 0xE4C: // STRB + writeback post-index
     case 0xE4D: // LDRB + writeback post-index
-      regB = (pcins & 0x000F0000) >> 16;
       immed = (pcins & 0x00000FFF);
-      ill_addr_encoded = regs->uregs[regB];
       break;
 
     case 0xE50: // STR (negative immediate)
@@ -516,9 +493,7 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
     case 0xE57: // LDRB (negative immediate) + writeback pre-index
     case 0xE44: // STRB (negative immediate) + writeback post-index
     case 0xE45: // LDRB (negative immediate) + writeback post-index
-      regB = (pcins & 0x000F0000) >> 16;
       immed = -(pcins & 0x00000FFF);
-      ill_addr_encoded = regs->uregs[regB];
       break;
 
     case 0xE1C: // STRH
@@ -527,9 +502,7 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
     case 0xE1F: // LDRH & LDRSH & LDRSB + writeback pre-index
     case 0xE0C: // STRH + writeback post-index
     case 0xE0D: // LDRH & LDRSH & LDRSB + writeback post-index
-      regB = (pcins & 0x000F0000) >> 16;
       immed = (pcins & 0x0000000F) | ((pcins & 0x00000F00)>>4);
-      ill_addr_encoded = regs->uregs[regB];
       break;
 
     case 0xE14: // STRH (negative immediate)
@@ -538,75 +511,70 @@ static uintptr_t decode_obfuscated_address2(struct pt_regs* regs)
     case 0xE17: // LDRH & LDRSH & LDRSB (negative immediate) + writeback pre-index
     case 0xE04: // STRH (negative immediate) + writeback pre-index
     case 0xE05: // LDRH & LDRSH & LDRSB (negative immediate) + writeback pre-index
-      regB = (pcins & 0x000F0000) >> 16;
       immed =- ((pcins & 0x0000000F) | ((pcins & 0x00000F00)>>4));
-      ill_addr_encoded = regs->uregs[regB];
       break;
 
     case 0xE88: // STM
     case 0xE89: // LDM
-      regB = (pcins & 0x000F0000) >> 16;
       immed = 0;
-      ill_addr_encoded = regs->uregs[regB];
       break;
 
-    case 0xFFF: // BX ; does not crash on execution but only after jumping
-      immed = 0;
-      ill_addr_encoded = 0;
-      MASK = 0xC0000000;
-      /*  we use 0xC0000000 instead of 0xFFFFFFFF
-          simply because eg: 0xFFFFFFFF - 0x800C = 0xFFFF7FF3
-          when the branch happens, the kernel/CPU will correct it
-          and the PC register is changed to 0xFFFF7FF2 (using a heuristic for alignment)
-          but if we add to 0xC0000000 we don't have this problem.
-      */
-      // pop LR from stack:
-      uintptr_t LRreg;
-      read_tracee_mem(&LRreg, addr_size, regs->uregs[13]);
-      regs->uregs[13] += addr_size; //fix stack pointer
-      regs->uregs[14] = LRreg; //backup the LR register
-      if (DO_ALL_LOGS) {LOG("popped LRreg: %02X\n", LRreg);}
-      break;
     default:
-      if (DO_ALL_LOGS) {LOG("WHOOPS err #469 -- opcode %02X not implemented\n", opcode);}
-      //raise(SIGABRT);
-      return 0;
+      LOG("WHOOPS err #469 -- opcode %02X not implemented\n", opcode);
+      close_debugger();
   }
 
-  if (DO_ALL_LOGS) {LOG("regB: %i\n", regB);}
-  if (immed < 0) {
-    if (DO_ALL_LOGS) {LOG("immed: -%02X\n", -1*immed);}
-  } else {
-    if (DO_ALL_LOGS) {LOG("immed: %02X\n", immed);}
-  }
-  if (DO_ALL_LOGS) {LOG("PCval: %02X\n", PCval);}
-  if (DO_ALL_LOGS) {LOG("ill_addr_encoded: %02X \n", ill_addr_encoded);}
-  dest = ((ill_addr_encoded+immed) ^ PCval ^ MASK) ; //we have to find *to*, the destination address which is encoded into the ill_addr.
-  if (DO_ALL_LOGS) {LOG("dest migrated frag: %02X\n", dest);}
-  return dest;
+  return ((fault_address+immed) ^ pc ^ MASK) ; //we have to find *to*, the destination address which is encoded into the ill_addr.
+}
+
+static uintptr_t decode_address_segv_X(struct pt_regs* regs, uintptr_t fault_address)
+{
+  uint32_t MASK = 0xC0000000;
+  /*  we use 0xC0000000 instead of 0xFFFFFFFF
+      simply because eg: 0xFFFFFFFF - 0x800C = 0xFFFF7FF3
+      when the branch happens, the kernel/CPU will correct it
+      and the PC register is changed to 0xFFFF7FF2 (using a heuristic for alignment)
+      but if we add to 0xC0000000 we don't have this problem.
+      */
+
+  // pop LR from stack:
+  uintptr_t LRreg;
+  read_tracee_mem(&LRreg, addr_size, regs->uregs[13]);
+  regs->uregs[13] += addr_size; //fix stack pointer
+  regs->uregs[14] = LRreg; //backup the LR register
+
+  return ((fault_address) ^ MASK) ; //we have to find *to*, the destination address which is encoded into the ill_addr.
 }
 
 static uintptr_t get_destination(pid_t debuggee_tid, unsigned int signal, struct pt_regs* regs,  bool is_selfdebugger)
 {
+  if (!ADDRESS_OBFUSCATION)
+    return decode_address_unobfuscated(regs);
+
   switch (signal)
   {
     case SIGTRAP:
-        return decode_unobfuscated_address(regs);
     case SIGFPE:
-      {
-        if (ADDRESS_OBFUSCATION)
-          return decode_obfuscated_address1(regs);
-        else
-          return decode_unobfuscated_address(regs);
-      }
+        return decode_address_fpe(regs);
     case SIGBUS:
     case SIGILL:
     case SIGSEGV:
       {
-        if (ADDRESS_OBFUSCATION)
-          return decode_obfuscated_address2(regs);
+        /* Gather more information on the signal */
+        siginfo_t siginfo;
+        ptrace(PTRACE_GETSIGINFO, debuggee_tid, NULL, &siginfo);
+        uintptr_t fault_address = (uintptr_t)siginfo.si_addr;
+        uintptr_t pc = regs->uregs[15];
+        LOG("fault address: %"PRIxPTR"\n", fault_address);
+        LOG("PC: %"PRIxPTR"\n", pc);
+
+        /* If the PC **is** the fault address, we lack execute permissions. Else, we lack
+         * read or write permissions.
+         */
+        if (fault_address == pc)
+          return decode_address_segv_X(regs, fault_address);
         else
-          return decode_unobfuscated_address(regs);
+          return decode_address_segv_RW(regs, fault_address);
       }
   }
 
