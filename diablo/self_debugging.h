@@ -8,6 +8,7 @@
 #ifndef _SELFDEBUGGING_MAIN_H_
 #define _SELFDEBUGGING_MAIN_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,7 +25,7 @@ extern "C" {
 
 #include <abstract_transformer.h>
 
-class Obfus;
+class ObfusData;
 class SelfDebuggingTransformer : public AbstractTransformer
 {
   protected:
@@ -49,7 +50,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
     std::vector<t_uint32> constants;
 
     /* The obfuscator instance */
-    Obfus* obfus;
+    std::unique_ptr<ObfusData> obfusData;
 
     /*** FUNCTIONS ***/
   private:

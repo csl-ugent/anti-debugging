@@ -6,6 +6,7 @@
 #ifndef _SELFDEBUGGING_OBFUSCATIONS_H_
 #define _SELFDEBUGGING_OBFUSCATIONS_H_
 
+#include <memory>
 #include <stack>
 #include <string>
 #include <vector>
@@ -18,12 +19,15 @@ extern "C" {
 #include <diabloflowgraph.h>
 }
 
-struct s_ins {
-  t_arm_ins* ins=0;     // LDR/STR instruction
-  _t_arm_opcode opc;    // ARM_STR or AMR_LDR
-  t_reg A, B, C;
-  t_uint32 immed;
-  bool neg_immed; //if immediate is negative value (subtracting offset) ;
+class s_ins {
+  public:
+    t_arm_ins* ins=0;     // LDR/STR instruction
+    _t_arm_opcode opc;    // ARM_STR or AMR_LDR
+    t_reg A, B, C;
+    t_uint32 immed;
+    bool neg_immed; //if immediate is negative value (subtracting offset) ;
+
+    s_ins(t_arm_ins* arm_ins);
 };
 
 struct s_bbl {
@@ -32,9 +36,8 @@ struct s_bbl {
   s_bbl* next=0;
 };
 
-// abstract class:
-class Obfus {
-  protected:
+class ObfusData {
+  public:
   /*
     IS_MUTILATED_ADDR_MAPPING ::
       Lets use a simple strategy to verify whether a context switch (signal invocation) is intended to execute/process a migrated fragement
@@ -42,23 +45,43 @@ class Obfus {
       If this variable is set to "true" then the addr_mapping will be mutilated, so we shall only have an addr_mapping of partially correct offsets.
       These partiall correct offsets can be used to match/validate  a computed dest address at runtime.
   */
-    bool IS_MUTILATED_ADDR_MAPPING = true;
-    const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
+    static const bool IS_MUTILATED_ADDR_MAPPING = true;
+    static const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
     //if 'IS_MUTILATED_ADDR_MAPPING' is enabled ==> the address mapping will be mutilated for those methods who rely on it.
+    t_randomnumbergenerator *rng;
+    std::vector<s_bbl*> ins_map_rw;
+    std::vector<s_bbl*> ins_map_x;
+    t_cfg* cfg;
+
+    static void generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 offset, t_section* map_sec);
+    static bool is_legal_branch(t_bbl* bbl, t_arm_ins* arm_ins);
+    static bool is_legal_loadstore(t_bbl* bbl, t_arm_ins* arm_ins);
+
+    void delete_from_ins_map(std::vector<s_bbl*>& ins_map, s_bbl* sbbl, s_ins* sins);
+    void intersect_available_and_mapped(t_regset& available, std::vector<s_bbl*>& ins_map, std::vector<s_bbl*>& vfil);
+    void generate_instruction_maps();
+    ObfusData(t_cfg* cfg);
+};
+
+// abstract class:
+class Obfus {
+  protected:
+    ObfusData* data;
 
   public:
-    virtual void prepareCFG(t_cfg* cfg) {}
-    virtual void postProcess(t_cfg* cfg) {}
-    virtual void generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 offset, t_section* map_sec);
+    Obfus(ObfusData* data) : data(data) {}
+    virtual ~Obfus() {}
+    static void choose_method(std::unique_ptr<Obfus>& obfus, const t_regset available, t_bool incoming_edge, ObfusData* data);
     virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant);
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target) = 0;
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target) = 0;
 };
 
 // concrete implementations:
 class Obfus_m_bkpt_1 			: public Obfus {
   // original BKPT method
   public:
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_bkpt_1(ObfusData* data) : Obfus(data) {};
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // SIGFPE and SIGILL methods:
@@ -68,7 +91,8 @@ class Obfus_m_fpe_1 			: public Obfus {
   // on our ARMv7 board this method generates a SIGILL (illegal instruction signal)  instead of a SEGFPE, but it works.
   // It is highly advised to use this method for experimental/educational purposes only.
   public:
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_fpe_1(ObfusData* data) : Obfus(data) {};
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_fpe_2 			: public Obfus {
@@ -77,26 +101,22 @@ class Obfus_m_fpe_2 			: public Obfus {
   // on our ARMv7 board this method generates a SIGILL (illegal instruction signal)  instead of a SEGFPE, but it works.
   // It is highly advised to use this method for experimental/educational purposes only.
   public:
+    Obfus_m_fpe_2(ObfusData* data) : Obfus(data) {};
     virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // SIGSEGV methods:
 class Obfus_segv_abstract 		: public Obfus {
   protected:
-    std::vector<s_bbl*> obfus_map;
-
     bool enforceDummyInstructions = true;     // may get stuck in infin. loop + segmentation fault      !!! in product set to false !!!
-    bool allowImmediateOffset = true;
     bool onlySimpleDummyInstructions = false; // may get stuck in infin. loop + segmentation fault      !!! in product set to false !!!
 
-    virtual bool obfus_is_legal_INS(t_bbl* bbl, t_arm_ins* arm_ins);
     virtual bool obfus_is_legal_INS_LOAD_STORE_MANY(t_bbl* bbl, t_arm_ins* arm_ins);
 
   public:
     //initialization list
-    Obfus_segv_abstract(bool enforceDummyInstructions, bool allowImmediateOffset) : enforceDummyInstructions(enforceDummyInstructions), allowImmediateOffset(allowImmediateOffset) {}
-    virtual void obfus_INS_Mapping(t_cfg* cfg);
+    Obfus_segv_abstract(ObfusData* data, bool enforceDummyInstructions) : Obfus(data), enforceDummyInstructions(enforceDummyInstructions) {}
 };
 
 class Obfus_m_segv_1 			: public Obfus_segv_abstract {
@@ -104,39 +124,35 @@ class Obfus_m_segv_1 			: public Obfus_segv_abstract {
 
   protected:
     bool delete_INS_BBL_FromMapping = true; // if true: disallow usage of same LDR/STR instruction for different context switches.
-    void obfus_intersect_available_and_mapped(t_regset& available, std::vector<s_bbl*>& vfil);
     t_uint32 obfus_generate_random_ill_addr(t_uint32 immed, bool neg_immed);
-    void obfus_add_illegal_address(t_cfg* cfg, t_bbl* bbl, bool isThumb, t_reg regB, t_uint32 immed, bool neg_immed);
+    void obfus_add_illegal_address(t_bbl* bbl, bool isThumb, t_reg regB, t_uint32 immed, bool neg_immed);
     t_regset obfus_get_used_registers_current_state(t_bbl* bbl);
     virtual void obfus_fill_stack_from_bbl(s_bbl* rbbl, s_ins* rsins, std::stack< std::pair<t_arm_ins*, s_bbl*> >& st);
     virtual bool obfus_process_stack_get_pairSplit_regB_check(std::pair<t_arm_ins*, s_bbl*>& pairSplit, s_ins* rsins);
     virtual std::pair<t_arm_ins*, s_bbl*> obfus_process_stack_get_pairSplit(t_bbl* bbl, s_ins* rsins, t_regset& LBBL, std::stack< std::pair<t_arm_ins*, s_bbl*> >& st, std::vector<t_arm_ins*>& vfilINS);
     std::pair<s_bbl*, s_bbl*> obfus_perform_split(std::pair<t_arm_ins*, s_bbl*>& pairSplit, bool force);
-    void printLBBL(t_regset& LBBL, std::string prefix);
     virtual std::pair<int, s_bbl*> obfus_prepare_rbbl(s_bbl* rbbl, s_ins* rsins, t_bbl* bbl, std::vector<t_arm_ins*>& vfilINS, std::pair<t_arm_ins*, s_bbl*>& pairSplit);
-    std::pair<s_bbl*, s_ins*> obfus_get_random_struct(std::vector<s_bbl*>& vfil, bool deleteFromVFIL);
-    void delete_from_mapping(s_bbl* sbbl, s_ins* sins);
-    short int obfus_process_rbbl(t_cfg* cfg, t_bbl* bbl, bool isThumb, s_bbl*& rbbl, s_ins* rsins, std::vector<t_arm_ins*>& vfilINS, std::pair<t_arm_ins*, s_bbl*>& pairSplit);
+    std::pair<s_bbl*, s_ins*> obfus_get_random_struct(std::vector<s_bbl*>& ins_map,std::vector<s_bbl*>& vfil, bool deleteFromVFIL);
+    short int obfus_process_rbbl(t_bbl* bbl, bool isThumb, s_bbl*& rbbl, s_ins* rsins, std::vector<t_arm_ins*>& vfilINS, std::pair<t_arm_ins*, s_bbl*>& pairSplit);
 
   public:
-    Obfus_m_segv_1(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_segv_abstract(enforceDummyInstructions, allowImmediateOffset) { }
-    virtual void prepareCFG(t_cfg* cfg);
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_1(ObfusData* data, bool enforceDummyInstructions) : Obfus_segv_abstract(data, enforceDummyInstructions) {}
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_2 			: public Obfus_m_segv_1 {
   // generate ill_addr_encoded_offset and jmp to random STR/LDR
   public:
-    Obfus_m_segv_2(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_1(enforceDummyInstructions, allowImmediateOffset) {}
+    Obfus_m_segv_2(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_1(data, enforceDummyInstructions) {}
     virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_3 			: public Obfus_m_segv_2 {
   // simplified version of m_2: insert a random STR/LDR instead of jumping to existing one.
   public:
-    Obfus_m_segv_3() : Obfus_m_segv_2(false, false) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_3(ObfusData* data) : Obfus_m_segv_2(data, false) {}
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -163,9 +179,8 @@ class Obfus_m_segv_4 			: public Obfus_m_segv_2 {
     virtual bool obfus_process_stack_get_pairSplit_regB_check(std::pair<t_arm_ins*, s_bbl*>& pairSplit, s_ins* rsins);
 
   public:
-    Obfus_m_segv_4(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_2(enforceDummyInstructions, allowImmediateOffset) { FATAL(("DEPRECATED")); }
-    virtual void prepareCFG(t_cfg* cfg);
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_4(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) { FATAL(("DEPRECATED")); }
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -189,7 +204,6 @@ class Obfus_m_segv_4_revised 	: public Obfus_m_segv_4 {
   protected:
     struct sm4 {
       t_object* obj;
-      t_cfg* cfg;
       t_regset available = RegsetNew();
       t_relocatable* target;
       t_bbl* obfus_final_bbl;
@@ -200,10 +214,9 @@ class Obfus_m_segv_4_revised 	: public Obfus_m_segv_4 {
     virtual bool obfus_process_stack_get_pairSplit_regB_check(std::pair<t_arm_ins*, s_bbl*>& pairSplit, s_ins* rsins);
 
   public:
-    Obfus_m_segv_4_revised(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_4(enforceDummyInstructions, allowImmediateOffset) { FATAL(("DEPRECATED")); }
-    virtual void prepareCFG(t_cfg* cfg) {}
-    virtual void postProcess(t_cfg* cfg);
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_4_revised(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_4(data, enforceDummyInstructions) { FATAL(("DEPRECATED")); }
+    virtual void postProcess();
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -231,8 +244,8 @@ class Obfus_m_segv_5 			: public Obfus_m_segv_2 {
     unsigned int insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg);
 
   public:
-    Obfus_m_segv_5(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_2(enforceDummyInstructions, allowImmediateOffset) { FATAL(("DEPRECATED")); }
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_5(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) { FATAL(("DEPRECATED")); }
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_6 			: public Obfus_m_segv_2 {
@@ -256,8 +269,8 @@ class Obfus_m_segv_6 			: public Obfus_m_segv_2 {
     unsigned int insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg);
 
   public:
-    Obfus_m_segv_6(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_2(enforceDummyInstructions, allowImmediateOffset) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_6(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) {}
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_7 			: public Obfus_m_segv_6 {
@@ -281,12 +294,12 @@ class Obfus_m_segv_7 			: public Obfus_m_segv_6 {
   */
 
   protected:
-    void insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_relocatable* target, t_regset& rest, bool isThumb, t_object* obj, t_cfg* cfg);
+    void insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_relocatable* target, t_regset& rest, bool isThumb, t_object* obj);
     t_arm_condition_code random_cond();
 
   public:
-    Obfus_m_segv_7(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_6(enforceDummyInstructions, allowImmediateOffset) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_7(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_6(data, enforceDummyInstructions) {}
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_8 			: public Obfus_m_segv_7 {
@@ -310,12 +323,12 @@ class Obfus_m_segv_8 			: public Obfus_m_segv_7 {
   */
 
   protected:
-    void find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, t_cfg* cfg, bool isThumb, t_regset& available, std::vector<s_bbl*>& vfil);
+    void find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, bool isThumb, t_regset& available, std::vector<s_bbl*>& vfil);
     t_arm_condition_code determine_condition_based_on_flag(t_bbl* bbl);
 
   public:
-    Obfus_m_segv_8(bool enforceDummyInstructions, bool allowImmediateOffset) : Obfus_m_segv_7(enforceDummyInstructions, allowImmediateOffset) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_8(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_7(data, enforceDummyInstructions) {}
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_9      : public Obfus_m_segv_2 {
@@ -330,27 +343,19 @@ class Obfus_m_segv_9      : public Obfus_m_segv_2 {
         --> does the Link register get changed? Probably yes ; so we have to push the LR if it's alive and pop it in debugger.
   */
   public:
-    Obfus_m_segv_9() : Obfus_m_segv_2(false, false) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
-
-  protected:
-    Obfus_m_segv_9(bool enforceDummyInstructions) : Obfus_m_segv_2(enforceDummyInstructions, false) {} //used by segv_10
-    virtual void push_LR_onto_stack(t_bbl* bbl, bool isThumb);
+    Obfus_m_segv_9(ObfusData* data) : Obfus_m_segv_2(data, false) {}
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
-class Obfus_m_segv_10      : public Obfus_m_segv_9 {
+class Obfus_m_segv_10      : public Obfus_m_segv_2 {
   /*
     More advanced version of segv_9 ;
     we construct a mapping of all BX instructions
     we choose a random one, and make sure its first operand gets an illegal address with encoded destination address.
   */
-  protected:
-    virtual bool obfus_is_legal_INS(t_bbl* bbl, t_arm_ins* arm_ins);
-    virtual void obfus_INS_Mapping(t_cfg* cfg);
-
   public:
-    Obfus_m_segv_10(bool enforceDummyInstructions) : Obfus_m_segv_9(enforceDummyInstructions) {}
-    virtual void encode_signalling(t_object* obj, t_cfg* cfg, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    Obfus_m_segv_10(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) {}
+    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 #endif

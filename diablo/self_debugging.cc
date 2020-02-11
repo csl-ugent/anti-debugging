@@ -47,11 +47,6 @@ SelfDebuggingTransformer::SelfDebuggingTransformer (t_object* obj, t_const_strin
     DiabloBrokerCall ("AddInitializationRoutine", obj, init_sym);
 
   LOG(L_TRANSFORMS, "START OF ANTI-DEBUGGING LOG\n");
-
-  srand(time(NULL)); // for rand() function
-
-  // <<<< choose your weapon >>>> ::
-  obfus = new Obfus_m_bkpt_1(); // "true" for large applications ; "false" for small ones.
 }
 
 SelfDebuggingTransformer::~SelfDebuggingTransformer ()
@@ -220,6 +215,9 @@ void SelfDebuggingTransformer::TransformIncomingEdgeImpl (t_bbl* bbl, t_cfg_edge
    */
   t_regset available = RegsetDiff(possible, BblRegsLiveAfter(bbl));
 
+  unique_ptr<Obfus> obfus;
+  Obfus::choose_method(obfus, available, TRUE, obfusData.get());
+
   /* Encode the constant that indicates the position in the mapping of migrated fragments for debugger context */
   obfus->encode_constant(obj, bbl, available, adr_size, constant);
 
@@ -246,7 +244,7 @@ void SelfDebuggingTransformer::TransformIncomingEdgeImpl (t_bbl* bbl, t_cfg_edge
   }
 
   /* Encode the signalling of the mini-debugger */
-  obfus->encode_signalling(obj, cfg, available, bbl, T_RELOCATABLE(CFG_EDGE_TAIL(edge)));
+  obfus->encode_signalling(obj, available, bbl, T_RELOCATABLE(CFG_EDGE_TAIL(edge)));
 
   /* Adjust the incoming edge to go to hell */
   CfgEdgeChangeTail(edge, CFG_HELL_NODE(cfg));
@@ -344,8 +342,11 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
     CfgEdgeChangeTail(edge, FunctionGetExitBlock(BBL_FUNCTION(bbl)));/* TODO: What if there's no exit block? */
   }
 
+  unique_ptr<Obfus> obfus;
+  Obfus::choose_method(obfus, available, FALSE, obfusData.get());
+
   /* Encode the signalling of the mini-debugger */
-  obfus->encode_signalling(obj, cfg, available, bbl, to);
+  obfus->encode_signalling(obj, available, bbl, to);
 }
 
 void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
@@ -1041,10 +1042,7 @@ void SelfDebuggingTransformer::TransformObject()
   /* Get the CFG and do some preparatory work on it */
   cfg = OBJECT_CFG(obj);
 
-  ////////////////////////////////////////
-  obfus->prepareCFG(cfg);
-  ////////////////////////////////////////
-
+  obfusData.reset(new ObfusData(cfg));
   PrepareCfg(cfg);
 
   Region* region;
@@ -1074,13 +1072,10 @@ void SelfDebuggingTransformer::TransformObject()
         TransformFunction(fun, FALSE);
 
         /* Set the value in the map: we're using the offset of the function's entrypoint to a known position in
-         * the binary. As known position we're using the map itself.
+         * the binary. As known position we're using the map itself. The map will contain relative distance from
+         * map_sec to the address of the moved function.
          */
-        // the map will contain relative distance from map_sec to the address of the moved function.
-
-        //////////////////////////////////////////////////////
-        obfus->generate_addr_mapping(obj, fun, offset, map_sec);
-        //////////////////////////////////////////////////////
+        ObfusData::generate_addr_mapping(obj, fun, offset, map_sec);
       }
     }
   }
@@ -1099,10 +1094,6 @@ void SelfDebuggingTransformer::TransformObject()
     t_uint32 offset = iii * map_entry_size;
     SectionSetData32 (map_sec, AddressNewForObject(obj, offset), constants[iii]);
   }
-
-  ////////////////////////////////////////
-  obfus->postProcess(cfg);
-  ////////////////////////////////////////
 
   STATUS(STOP, ("Anti Debugging"));
 }
