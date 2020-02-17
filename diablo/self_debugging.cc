@@ -32,15 +32,15 @@ SelfDebuggingTransformer::SelfDebuggingTransformer (t_object* obj, t_const_strin
   str_sym = SymbolTableGetSymbolByName(OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX"Str");
   ldm_sym = SymbolTableGetSymbolByName(OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX"Ldm");
   stm_sym = SymbolTableGetSymbolByName(OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX"Stm");
-  nr_of_entries_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "nr_of_entries");
-  map_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "addr_mapping");
+  nr_of_targets_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "nr_of_targets");
+  target_map_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "target_map");
 
   /* Check if all symbols were found */
-  ASSERT(init_sym && ldr_sym && str_sym && ldm_sym && stm_sym && map_sym && nr_of_entries_sym, ("Didn't find all symbols present in the debugger object! Are you sure this object was linked in?"));
+  ASSERT(init_sym && ldr_sym && str_sym && ldm_sym && stm_sym && target_map_sym && nr_of_targets_sym, ("Didn't find all symbols present in the debugger object! Are you sure this object was linked in?"));
 
   /* The size of a map entry has been set as the first element of the map */
-  map_entry_size = SectionGetData32 (T_SECTION(SYMBOL_BASE(map_sym)), SYMBOL_OFFSET_FROM_START(map_sym));
-  map_sec = T_SECTION(SYMBOL_BASE(map_sym));
+  target_map_entry_size = SectionGetData32 (T_SECTION(SYMBOL_BASE(target_map_sym)), SYMBOL_OFFSET_FROM_START(target_map_sym));
+  target_map_sec = T_SECTION(SYMBOL_BASE(target_map_sym));
 
   /* Adapt the program so before start the initialization routine is executed */
   if (SymbolTableGetSymbolByName(OBJECT_SUB_SYMBOL_TABLE(obj), FINAL_PREFIX_FOR_LINKED_IN_SD_OBJECT "Init"))
@@ -218,7 +218,8 @@ void SelfDebuggingTransformer::TransformIncomingEdgeImpl (t_bbl* bbl, t_cfg_edge
   unique_ptr<Obfus> obfus;
   Obfus::choose_method(obfus, available, TRUE, obfusData.get());
 
-  /* Encode the constant that indicates the position in the mapping of migrated fragments for debugger context */
+  /*  Optionally encode the associated constant that indicates the position in the mapping */
+  t_uint32 constant = constants.back();
   obfus->encode_constant(obj, bbl, available, adr_size, constant);
 
   /* If we're dealing with a call edge, emulate the call by moving the return address to LR */
@@ -314,7 +315,7 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
          * Also, set the 'to' relocatable to the mapping section, to signify a return to the mini-debugger.
          */
         InsKill (T_INS(ret_ins));
-        to = T_RELOCATABLE(map_sec);
+        to = T_RELOCATABLE(target_map_sec);
       }
       break;
     }
@@ -344,6 +345,10 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
 
   unique_ptr<Obfus> obfus;
   Obfus::choose_method(obfus, available, FALSE, obfusData.get());
+
+  /* Add a map entry for the target, and optionally encode the associated constant that indicates the position in the mapping */
+  t_uint32 constant = TargetMapAddEntry(to);
+  obfus->encode_constant(obj, bbl, available, adr_size, constant);
 
   /* Encode the signalling of the mini-debugger */
   obfus->encode_signalling(obj, available, bbl, to);
@@ -1029,6 +1034,25 @@ void SelfDebuggingTransformer::PrepareCfg (t_cfg* cfg)
   MarkFrom(cfg, T_BBL(SYMBOL_BASE(stm_sym)));
 }
 
+
+t_uint32 SelfDebuggingTransformer::TargetMapAddEntry(t_relocatable* target)
+{
+  /* Determine a constant. In this implementation we just increment... */
+  t_uint32 constant = constants.size();
+  constants.push_back(constant);
+
+  /* Calculate the offset in the map where we will put the value of the KV-pair */
+  t_uint32 offset = constant * target_map_entry_size + sizeof(t_uint32);/* The offset of the value in the map */
+
+  /* Set the value in the map: we're using the offset of the target to a known position in the binary. As known position we're using the map itself. The
+   * map will contain relative distance from target_map_sec to the address of the target.
+   */
+  ObfusData::generate_addr_mapping(obj, target, offset, target_map_sec);
+
+  /* Return constant, so it can optionally be encoded */
+  return constant;
+}
+
 void SelfDebuggingTransformer::TransformObject()
 {
   STATUS(START, ("Anti Debugging"));
@@ -1061,38 +1085,28 @@ void SelfDebuggingTransformer::TransformObject()
         LOG(L_TRANSFORMS, log_msg, fun_name);
         info->successfully_applied = TRUE;/* At least a part of the annotated region will be moved to debugger context */
 
-        /* Initialize some global values used in transforming a function */
-        constant = transform_index + 1;
-        constants.push_back(constant);
+        /* Add map entry for entry BBL */
+        TargetMapAddEntry(T_RELOCATABLE(FUNCTION_BBL_FIRST(fun)));
 
-        /* Calculate the offset in the map where we will put the value of the KV-pair */
-        t_uint32 offset = transform_index * map_entry_size + sizeof(t_uint32);/* The offset of the value in the map */
-
-        /* Do the actual function transformation (transform_index will be incremented) */
+        /* Do the actual function transformation */
         TransformFunction(fun, FALSE);
-
-        /* Set the value in the map: we're using the offset of the function's entrypoint to a known position in
-         * the binary. As known position we're using the map itself. The map will contain relative distance from
-         * map_sec to the address of the moved function.
-         */
-        ObfusData::generate_addr_mapping(obj, fun, offset, map_sec);
       }
     }
   }
-  //todo: we only need to use the mapping table for OBFUS_METHOD 0(original) and 1.
 
   /* Set all the variables in the linked in object */
-  SectionSetData32 (T_SECTION(SYMBOL_BASE(nr_of_entries_sym)), SYMBOL_OFFSET_FROM_START(nr_of_entries_sym), transform_index);
+  t_uint32 nr_of_targets = constants.size();
+  SectionSetData32 (T_SECTION(SYMBOL_BASE(nr_of_targets_sym)), SYMBOL_OFFSET_FROM_START(nr_of_targets_sym), nr_of_targets);
 
   /* Resize the mapping table now that we know its size */
-  SECTION_SET_DATA(map_sec, Realloc (SECTION_DATA(map_sec), transform_index * map_entry_size));
-  SECTION_SET_CSIZE(map_sec, transform_index * map_entry_size);
+  SECTION_SET_DATA(target_map_sec, Realloc (SECTION_DATA(target_map_sec), nr_of_targets * target_map_entry_size));
+  SECTION_SET_CSIZE(target_map_sec, nr_of_targets * target_map_entry_size);
 
-  for(t_uint32 iii = 0; iii < transform_index; iii++)
+  for(t_uint32 iii = 0; iii < nr_of_targets; iii++)
   {
     /* Set the key in the map, at the right offset */
-    t_uint32 offset = iii * map_entry_size;
-    SectionSetData32 (map_sec, AddressNewForObject(obj, offset), constants[iii]);
+    t_uint32 offset = iii * target_map_entry_size;
+    SectionSetData32 (target_map_sec, AddressNewForObject(obj, offset), constants[iii]);
   }
 
   STATUS(STOP, ("Anti Debugging"));

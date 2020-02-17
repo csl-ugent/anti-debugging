@@ -94,7 +94,7 @@ void Obfus::encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_ui
     ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << const_reg), ARM_CONDITION_AL, isThumb);
 }
 
-void ObfusData::generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 offset, t_section* map_sec)
+void ObfusData::generate_addr_mapping(t_object* obj, t_relocatable* target, t_uint32 offset, t_section* map_sec)
 {
   if (IS_MUTILATED_ADDR_MAPPING) {
     //this relocatable will store the migrated code fragements address into addr_mapping
@@ -113,7 +113,7 @@ void ObfusData::generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 o
         AddressNullForObject(obj), // addend
         T_RELOCATABLE(map_sec), // from  R01
         AddressNewForObject(obj, offset), // from-offset
-        T_RELOCATABLE(FUNCTION_BBL_FIRST(fun)), // to  R00
+        target, // to  R00
         AddressNullForObject(obj), // to-offset
         FALSE, // hell
         NULL, // edge
@@ -127,7 +127,7 @@ void ObfusData::generate_addr_mapping(t_object* obj, t_function* fun, t_uint32 o
         AddressNullForObject(obj), /* addend */
         T_RELOCATABLE(map_sec), /* from */
         AddressNewForObject(obj, offset), /* from-offset */
-        T_RELOCATABLE(FUNCTION_BBL_FIRST(fun)), /* to */
+        target, /* to */
         AddressNullForObject(obj), /* to-offset */
         FALSE, /* hell */
         NULL, /* edge */

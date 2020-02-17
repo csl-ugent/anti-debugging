@@ -54,8 +54,8 @@ static const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
 static size_t addr_size = sizeof(void*);
 
 /* These variables will be filled in by Diablo */
-t_sd_map_entry DIABLO_Debugger_addr_mapping[1] __attribute__((section (".data.addr_mapping"))) = {{ sizeof(DIABLO_Debugger_addr_mapping[0]), 0 }};
-size_t DIABLO_Debugger_nr_of_entries = 42;
+t_target_map_entry DIABLO_Debugger_target_map[1] __attribute__((section (".data.target_map"))) = {{ sizeof(DIABLO_Debugger_target_map[0]), 0 }};
+size_t DIABLO_Debugger_nr_of_targets = 42;
 /* we will use a global variable to keep debugger state in handling signals. This works if we never handle multiple signals at once in the
  * debugger (through multithreading), as in that case we would need to use TLS.
  */
@@ -132,8 +132,8 @@ static bool init_debugger(pid_t target_pid)
   setlinebuf(stderr);
 #endif
 
-  LOG("Initialize debugger. Number of entries: %zu\n", DIABLO_Debugger_nr_of_entries);
-  LOG("Address of the mapping: %p\n", DIABLO_Debugger_addr_mapping);
+  LOG("Initialize debugger. Number of entries: %zu\n", DIABLO_Debugger_nr_of_targets);
+  LOG("Address of the mapping: %p\n", DIABLO_Debugger_target_map);
 
   /* Use the PID of the debuggee to open its mem_file */
   char str[80];
@@ -372,43 +372,45 @@ static uintptr_t decode_address_unobfuscated(struct pt_regs* regs)
   regs->uregs[13] += addr_size;
 
   /* Look up the the destination in the map */
-  for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_entries; iii++)
+  for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_targets; iii++)
   {
-    t_sd_map_entry loop = DIABLO_Debugger_addr_mapping[iii];
+    t_target_map_entry loop = DIABLO_Debugger_target_map[iii];
 
     if(loop.key == id)
     {
       LOG("Found value: %"PRIxPTR" for id: %"PRIxPTR"\n", loop.value, id);
       if (IS_MUTILATED_ADDR_MAPPING) {
-        uintptr_t ret = (loop.value ^ (uintptr_t)DIABLO_Debugger_addr_mapping);
+        uintptr_t ret = (loop.value ^ (uintptr_t)DIABLO_Debugger_target_map);
         ret ^= MUTILATION_MASK_ADR_MAP;
         return ret;
       }
       else
-        return loop.value + (uintptr_t)DIABLO_Debugger_addr_mapping;
+        return loop.value + (uintptr_t)DIABLO_Debugger_target_map;
     }
   }
 
-  /* Haven't found a destination? That's bad! */
-  LOG("Unknown address: application will be forced to shut down!\n");
-  close_debugger();
+  return 0;
 }
 
-static bool verify_fragment_destination(uintptr_t dest)
+static bool verify_target_destination(uintptr_t dest)
 {
+  /* Not an actual destination, but a fake destination signaling a return */
+  if (dest == (uintptr_t)DIABLO_Debugger_target_map)
+    return true;
+
   /* If 'dest' is a valid address, we should be able to find the corresponding entry in the map */
-  for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_entries; iii++)
+  for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_targets; iii++)
   {
-    t_sd_map_entry loop = DIABLO_Debugger_addr_mapping[iii];
+    t_target_map_entry loop = DIABLO_Debugger_target_map[iii];
 
     /* Decode the (possibly mutilated) address value for this entry */
     uintptr_t val;
     if (IS_MUTILATED_ADDR_MAPPING) {
-      val = (loop.value ^ (uintptr_t)DIABLO_Debugger_addr_mapping);
+      val = (loop.value ^ (uintptr_t)DIABLO_Debugger_target_map);
       val ^= MUTILATION_MASK_ADR_MAP;
     }
     else
-      val = loop.value + (uintptr_t)DIABLO_Debugger_addr_mapping;
+      val = loop.value + (uintptr_t)DIABLO_Debugger_target_map;
 
     /* Check whether we have a match */
     if (val == dest)
@@ -521,7 +523,7 @@ static uintptr_t decode_address_segv_RW(struct pt_regs* regs, uintptr_t fault_ad
 
     default:
       LOG("WHOOPS err #469 -- opcode %02X not implemented\n", opcode);
-      close_debugger();
+      return 0;
   }
 
   return ((fault_address+immed) ^ pc ^ MASK) ; //we have to find *to*, the destination address which is encoded into the ill_addr.
@@ -593,7 +595,8 @@ static __attribute__((noreturn, naked)) void do_switch(struct pt_regs* regs)
       );
 }
 
-static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid, unsigned int signal)
+/* This function only returns if the signal turns out not to have been protection-related */
+static void handle_switch(pid_t debuggee_tid, unsigned int signal)
 {
   /* Get the actual current registers of the debuggee */
   struct pt_regs regs;
@@ -603,19 +606,17 @@ static __attribute__((noreturn)) void handle_switch(pid_t debuggee_tid, unsigned
   bool is_selfdebugger = !selfdebugger_pid;
   uintptr_t destination_address = get_destination(debuggee_tid, signal, &regs, is_selfdebugger);
 
-  /* If we're the self-debugger, we're switching to a fragment and we need to verify its destination address */
-  if (is_selfdebugger)
+  /* Verify whether this is a valid target. If not, we return so that the signal can be passed on to the debuggee */
+  if (!verify_target_destination(destination_address))
   {
-    /* If the address is not OK, fuck up execution by continuing at next instruction address */
-    if (!verify_fragment_destination(destination_address))
-    {
-      LOG("Verification failed!\n");
-      destination_address = 0;
-    }
+    LOG("Target validation failed! Assuming this is an genuine signal...\n");
+    return;
   }
 
+  /* THIS IS THE POINT OF NO RETURN... */
+
   /* If the destination address is that of the mapping, it's a return */
-  if (destination_address == (uintptr_t)DIABLO_Debugger_addr_mapping)
+  if (destination_address == (uintptr_t)DIABLO_Debugger_target_map)
   {
       LOG("Returning!!\n");
       destination_address = 1;
@@ -780,12 +781,14 @@ static __attribute__((noreturn)) void debug_main()
             switch (event)
             {
               case PTRACE_EVENT_EXEC:
-                /* If we're dealing with an exec we should simply detach from this PID and continue the debug loop */
-                ptrace(PTRACE_DETACH, recv_tid, NULL, NULL);
+                {
+                  /* If we're dealing with an exec we should simply detach from this PID and continue the debug loop */
+                  ptrace(PTRACE_DETACH, recv_tid, NULL, NULL);
 
-                /* Remove the thread (this might close the debugger if there's no debuggees left) */
-                removeThread(recv_tid);
-                continue;
+                  /* Remove the thread (this might close the debugger if there's no debuggees left) */
+                  removeThread(recv_tid);
+                  continue;
+                }
               case PTRACE_EVENT_CLONE:
               case PTRACE_EVENT_FORK:
               case PTRACE_EVENT_VFORK:
@@ -795,22 +798,27 @@ static __attribute__((noreturn)) void debug_main()
                   ptrace(PTRACE_GETEVENTMSG, recv_tid, 0, &new_pid);
                   ptrace(PTRACE_CONT, new_pid, NULL, NULL);
                   addThread(new_pid);
+                  signal = 0;/* Don't deliver this signal */
                   break;
                 }
               case PTRACE_EVENT_EXIT:
-                ptrace(PTRACE_DETACH, recv_tid, NULL, NULL);
-                continue;
+                {
+                  ptrace(PTRACE_DETACH, recv_tid, NULL, NULL);
+                  continue;
+                }
               case PTRACE_EVENT_STOP:
-                break;
+                {
+                  signal = 0;/* Don't deliver this signal */
+                  break;
+                }
               default:
                 handle_switch(recv_tid, signal);
             }
 
-            signal = 0;/* Don't deliver this signal */
             break;
           }
 
-        /* Obfuscated signalling */
+        /* Obfuscated signaling */
         case SIGBUS:
         case SIGFPE: //arithmetic exception: such as divide by zero ; should be SIGFPE (8)
         case SIGILL:

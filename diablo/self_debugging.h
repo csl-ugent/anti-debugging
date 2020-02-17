@@ -40,13 +40,12 @@ class SelfDebuggingTransformer : public AbstractTransformer
     t_function* function_str;
 
     /* Variables for the Key-Value map used by the debugger to find which code to execute */
-    t_symbol* map_sym;
-    t_section* map_sec;
-    t_uint32 map_entry_size;/* The size of one entry */
-    t_symbol* nr_of_entries_sym;/* The number of entries in the map */
+    t_symbol* target_map_sym;
+    t_section* target_map_sec;
+    t_uint32 target_map_entry_size;/* The size of one entry */
+    t_symbol* nr_of_targets_sym;/* The number of targets in the map */
 
     /* The constants used by the map as key */
-    t_uint32 constant;
     std::vector<t_uint32> constants;
 
     /* The obfuscator instance */
@@ -55,6 +54,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
     /*** FUNCTIONS ***/
   private:
     /* Private helper functions */
+    t_uint32 TargetMapAddEntry(t_relocatable* target);
     void PrepareCfg (t_cfg* cfg);
     void TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins);
     void TransformLdr(t_bbl* bbl, t_arm_ins* orig_ins);

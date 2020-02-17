@@ -42,10 +42,10 @@
 #define FL_B FL_SPSR/* Cheat by using the FL_SPSR flag to store whether a we only load/store a byte */
 
 /* Structs to be used in the code */
-typedef struct t_sd_map_entry{
+typedef struct t_target_map_entry{
   uint32_t key;
   ptrdiff_t value;
-} t_sd_map_entry;
+} t_target_map_entry;
 
 /* The functions that will be used by Diablo */
 #ifdef LINKIN_AFTER
