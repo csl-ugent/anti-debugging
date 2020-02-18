@@ -596,7 +596,7 @@ static __attribute__((noreturn, naked)) void do_switch(struct pt_regs* regs)
 }
 
 /* This function only returns if the signal turns out not to have been protection-related */
-static void handle_switch(pid_t debuggee_tid, unsigned int signal)
+static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_ss)
 {
   /* Get the actual current registers of the debuggee */
   struct pt_regs regs;
@@ -642,6 +642,13 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal)
       regs.uregs[15] = destination_address;
   }
 
+  /* TODO: In principle, we need to synchronize here, make sure the debuggee is running already before we continue */
+  /* Restore previous signal blocking mask */
+  if (sigprocmask(SIG_SETMASK, &old_ss, NULL) == -1) {
+    perror(0);
+    exit(1);
+  }
+
   /* Do actual context switch */
   LOG("Going to switch to: %lx\n", regs.uregs[15]);
   do_switch(&regs);
@@ -650,6 +657,17 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal)
 static __attribute__((noreturn)) void debug_main()
 {
   LOG("Debug loop entered\n");
+
+  /* Ignore all possible signals. Can't ever actually ignore SIGSTOP and SIGKILL, but can at least do the rest. Caution: Blocking
+   * synchronously generated SIGBUS, SIGFPE, SIGILL, or SIGSEGV signals is undefined. Get the old set of ignored signals,
+   * so we can restore it on the switch back.
+   */
+  sigset_t ss, old_ss;
+  sigfillset(&ss);
+  if (sigprocmask(SIG_BLOCK, &ss, &old_ss) == -1) {
+    perror(0);
+    exit(1);
+  }
 
   /* Infinite loop, handling signals until the debuggee exits */
   while(true)
@@ -812,7 +830,7 @@ static __attribute__((noreturn)) void debug_main()
                   break;
                 }
               default:
-                handle_switch(recv_tid, signal);
+                handle_switch(recv_tid, signal, old_ss);
             }
 
             break;
@@ -824,7 +842,7 @@ static __attribute__((noreturn)) void debug_main()
         case SIGILL:
         case SIGSEGV:
           {
-            handle_switch(recv_tid, signal);
+            handle_switch(recv_tid, signal, old_ss);
           }
       }
 
@@ -896,16 +914,6 @@ void DIABLO_Debugger_Init()
       {
         /* Only allow parent to ptrace */
         prctl(PR_SET_PTRACER, parent_pid);
-
-        /* Ignore all possible signals. Can't ever actually ignore SIGSTOP and SIGKILL, but can at least do the rest. Caution: Blocking
-         * synchronously generated SIGBUS, SIGFPE, SIGILL, or SIGSEGV signals is undefined.
-         */
-        sigset_t ss;
-        sigfillset(&ss);
-        if (sigprocmask(SIG_BLOCK, &ss, NULL) == -1) {
-          perror(0);
-          exit(1);
-        }
 
         /* Move process to a separate process group. This avoids signals sent from the terminal and
          * meant for the parent ending up at the child. A CTRL-Z on the commandline would stop our
