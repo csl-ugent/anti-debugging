@@ -651,10 +651,8 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   /* THIS IS THE POINT OF NO RETURN... */
 
   /* Prepare the debuggee to be continued at the debug loop, then actually let it continue */
-  struct pt_regs new_regs;
-  ptrace(PTRACE_GETREGS, debuggee_tid, NULL, &new_regs);
-  new_regs.uregs[15] = (uintptr_t)&return_to_debug_main;
-  ptrace(PTRACE_SETREGS, debuggee_tid, NULL, &new_regs);
+  regs.uregs[15] = (uintptr_t)&return_to_debug_main;
+  ptrace(PTRACE_SETREGS, debuggee_tid, NULL, &regs);
   ptrace(PTRACE_CONT, debuggee_tid, NULL, NULL);
 
   /* If the destination address is that of the mapping, it's a return */
