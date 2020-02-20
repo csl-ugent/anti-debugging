@@ -79,16 +79,39 @@ static void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
   }
 }
 
+#define USE_MEM_FILE
+#ifdef USE_MEM_FILE
+static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
+{
+  lseek(mem_file, addr, SEEK_SET);
+  if (write(mem_file, buf, size) == -1) {
+    perror(0);
+    exit(1);
+  }
+}
+#else
 /* For writing /proc/PID/mem doesn't work on all kernels (not on Android 4.3 for example) so we use ptrace */
 static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
 {
+  /* Stop the debuggee, so we can use PTRACE requests to write to its address space */
+  if (ptrace(PTRACE_INTERRUPT, debuggee_pid, 0, 0) == -1)
+  {
+    perror(0);
+    exit(1);
+  }
+  waitpid(debuggee_pid, NULL, __WALL);
+
   /* Write to the process word per word, except for non-word-aligned parts at the end */
   size_t bytes_read = 0;
   for (; bytes_read + addr_size <= size; addr += addr_size, bytes_read += addr_size)
   {
     uintptr_t value;
     memcpy(&value, buf + bytes_read, addr_size);
-    ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value);
+    if (ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value) == -1)
+    {
+      perror(0);
+      exit(1);
+    }
   }
 
   /* The remainder is unaligned to the word size. Unfortunately we can only write in words using the ptrace
@@ -104,9 +127,21 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
     memcpy(&value, buf + bytes_read, size - bytes_read);
 
     /* Write the adapted word */
-    ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value);
+    if (ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value) == -1)
+    {
+      perror(0);
+      exit(1);
+    }
+  }
+
+  /* Let the debuggee continue */
+  if (ptrace(PTRACE_CONT, debuggee_pid, 0, 0) == -1)
+  {
+    perror(0);
+    exit(1);
   }
 }
+#endif
 
 /* Perform initialization for the debugger */
 static bool init_debugger(pid_t target_pid)
