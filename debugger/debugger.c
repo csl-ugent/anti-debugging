@@ -913,6 +913,18 @@ static void fini_routine()
   raise(SIGMINIDEBUGGER);
 }
 
+static void passthrough_signal_handler(int signal)
+{
+  LOG("SIGNAL HANDLER: Passing through signal %d.\n", signal);
+
+  /* Inject signal. Can't use PTRACE_CONT for this, its result is not guaranteed */
+  if (kill(debuggee_pid, signal) == -1)
+  {
+    perror(0);
+    exit(1);
+  }
+}
+
 /* The inialization routine that will fork the process. The child becomes the debugger and debugs the parent */
 void DIABLO_Debugger_Init()
 {
@@ -956,6 +968,18 @@ void DIABLO_Debugger_Init()
          * stopping.
          */
         setpgid(0, 0);
+
+        /* Install signal handler for SIGTERM. If the self-debugger receives a SIGTERM, we actually
+         * want the protected applicaton to get it, and perform a graceful shutdown.
+         */
+        struct sigaction sb;
+        sb.sa_handler = passthrough_signal_handler;
+        sigemptyset(&sb.sa_mask);
+        sb.sa_flags = 0;
+        if (sigaction(SIGTERM, &sb, 0) == -1) {
+          perror(0);
+          exit(1);
+        }
 
         /* Attach to all thread in the thread group (process) */
         ANDROID_LOG("Mini-debugger has been forked and will start attaching!");
