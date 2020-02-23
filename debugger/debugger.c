@@ -1030,6 +1030,7 @@ uintptr_t DIABLO_Debugger_Ldr(uintptr_t* base, uintptr_t offset, uint32_t flags)
 {
   uintptr_t addr = *base + ((flags & FL_DIRUP) ? offset : -offset);
   uintptr_t dest = (flags & FL_PREINDEX) ? addr : *base;
+  LOG("Base: %p, Offset: %x, flags: %u.\n", base, offset, flags);
   LOG("Going to load something from %x.\n", dest);
 
   uintptr_t value = 0;
