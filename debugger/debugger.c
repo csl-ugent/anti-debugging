@@ -46,7 +46,6 @@
 ///////////////////////////////////////////////////////
 //////////////////// OBFUSCATION //////////////////////
 ///////////////////////////////////////////////////////
-static const bool ADDRESS_OBFUSCATION = true;
 static const bool IS_MUTILATED_ADDR_MAPPING = true;
 static const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
 
@@ -585,12 +584,10 @@ static uintptr_t decode_address_segv_X(struct pt_regs* regs, uintptr_t fault_add
 
 static uintptr_t get_destination(pid_t debuggee_tid, unsigned int signal, struct pt_regs* regs,  bool is_selfdebugger)
 {
-  if (!ADDRESS_OBFUSCATION)
-    return decode_address_unobfuscated(regs);
-
   switch (signal)
   {
     case SIGTRAP:
+      return decode_address_unobfuscated(regs);
     case SIGFPE:
         return decode_address_fpe(regs);
     case SIGBUS:
