@@ -69,7 +69,8 @@ static int mem_file;
 static int mem_file_own;
 
 /* For reading we can always use /proc/PID/mem */
-static void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
+/* TODO: this should be a static function, but we had to hack this away to avoid Diablo issues... */
+void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
 {
   lseek(mem_file, addr, SEEK_SET);
   if (read(mem_file, buf, size) == -1) {
