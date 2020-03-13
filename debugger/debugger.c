@@ -55,10 +55,8 @@ static size_t addr_size = sizeof(void*);
 /* These variables will be filled in by Diablo */
 t_target_map_entry DIABLO_Debugger_target_map[1] __attribute__((section (".data.target_map"))) = {{ sizeof(DIABLO_Debugger_target_map[0]), 0 }};
 size_t DIABLO_Debugger_nr_of_targets = 42;
-/* we will use a global variable to keep debugger state in handling signals. This works if we never handle multiple signals at once in the
- * debugger (through multithreading), as in that case we would need to use TLS.
- */
 
+/* These global variables should be made TLS if we want multithreading support */
 static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
 static pid_t debuggee_pid;/* The PID of the debuggee process, i.e., the opposite process */
 static char debug_stack[16384];
