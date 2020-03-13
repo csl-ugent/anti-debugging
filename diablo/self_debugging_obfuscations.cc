@@ -107,7 +107,7 @@ void ObfusData::generate_addr_mapping(t_object* obj, t_relocatable* target, t_ui
     sstreamops << "^";
     sstream << "R00";
     sstream << sstreamops.str() << "\\" << WRITE_32;
-    VERBOSE(0,("generate_addr_mapping:  %s", sstream.str().c_str()));
+    VERBOSE(1,("generate_addr_mapping:  %s", sstream.str().c_str()));
 
     RelocTableAddRelocToRelocatable(OBJECT_RELOC_TABLE(obj),
         AddressNullForObject(obj), // addend
@@ -153,7 +153,7 @@ ObfusData::ObfusData(t_cfg* cfg)
 
 bool ObfusData::is_legal_branch(t_bbl* bbl, t_arm_ins* arm_ins)
 {
-  VERBOSE(0, ("\t xins: @G, type:%i %s, reg: %i",
+  VERBOSE(2, ("\t xins: @G, type:%i %s, reg: %i",
         ARM_INS_CADDRESS(arm_ins),
         ARM_INS_TYPE(arm_ins),
         ARM_INS_OPCODE(arm_ins) == ARM_BLX ? "BLX" : "BX",
@@ -207,7 +207,7 @@ bool ObfusData::is_legal_loadstore(t_bbl* bbl, t_arm_ins* arm_ins)
 
 void ObfusData::generate_instruction_maps()
 {
-  VERBOSE(0, ("-------- obfus_INS_Mapping start --------"));
+  VERBOSE(1, ("-------- obfus_INS_Mapping start --------"));
 
   t_bbl* bbl;
   CFG_FOREACH_BBL(cfg, bbl) {
@@ -265,9 +265,9 @@ void ObfusData::generate_instruction_maps()
     if (!bbls_x->vsins->empty())
       ins_map_x.push_back(bbls_x);
   }
-  VERBOSE(0, ("BBLs in bbls_rw map: %i", ins_map_rw.size()));
-  VERBOSE(0, ("BBLs in bbls_x map: %i", ins_map_x.size()));
-  VERBOSE(0, ("-------- end --------"));
+  VERBOSE(1, ("BBLs in bbls_rw map: %i", ins_map_rw.size()));
+  VERBOSE(1, ("BBLs in bbls_x map: %i", ins_map_x.size()));
+  VERBOSE(1, ("-------- end --------"));
 }
 
 
@@ -307,12 +307,12 @@ void ObfusData::intersect_available_and_mapped(t_regset& available, vector<s_bbl
       }
     }
   }
-  VERBOSE(0, ("\t vfil count: %i", vfil.size()));
+  VERBOSE(1, ("\t vfil count: %i", vfil.size()));
   //for (unsigned int i = 0; i < vfil.size(); i++)
   //VERBOSE(0, ("\t\t possible branch to ins: @G, bbl: @G  using regB: %i, regC: %i",ARM_INS_CADDRESS(vfil[i]->sins->ins), BBL_CADDRESS(vfil[i]->bbl), vfil[i]->sins->B, vfil[i]->sins->C));
 }
 
-void Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   // Create the breakpoint to switch to the debugger
   t_arm_ins* arm_ins;
@@ -323,9 +323,11 @@ void Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_regset& available, t_bbl
   t_regset regs_use = ARM_INS_REGS_USE(arm_ins);
   RegsetSetSubReg(regs_use, ARM_REG_CPSR);
   ARM_INS_SET_REGS_USE(arm_ins,regs_use);
+
+  return arm_ins;
 }
 
-void Obfus_m_fpe_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_fpe_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT((RegsetCountRegs(available) >= 2), ("Can not use this signalling encoding: At least 2 available register(s) required!"));
 
@@ -342,7 +344,7 @@ void Obfus_m_fpe_1::encode_signalling(t_object* obj, t_regset& available, t_bbl*
   if (regX == ARM_REG_NONE || regY == ARM_REG_NONE)
     FATAL(("At least 2 avail. regs required"));
 
-  VERBOSE(0, ("%i %i", regX, regY));
+  VERBOSE(1, ("%i %i", regX, regY));
 
   // X = rand()%100    ;   Y = 0
   // X = X/Y  -> SIGFPE only if the machine supports the DIV operation and result isn't turned into zero.
@@ -351,9 +353,11 @@ void Obfus_m_fpe_1::encode_signalling(t_object* obj, t_regset& available, t_bbl*
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regX, ARM_REG_NONE, RNGGenerateWithRange(data->rng, 0, 100), ARM_CONDITION_AL);
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regY, ARM_REG_NONE, 0, ARM_CONDITION_AL);
   ArmMakeInsForBbl(Div, Append, arm_ins, bbl, isThumb, regX, regX, regY, 0, ARM_CONDITION_AL);
+
+  return arm_ins;
 }
 
-void Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT((RegsetCountRegs(available) >= 2), ("Can not use this signalling encoding: At least 2 available register(s) required!"));
 
@@ -370,7 +374,7 @@ void Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, t_bbl*
   if (regX == ARM_REG_NONE || regY == ARM_REG_NONE)
     FATAL(("At least 2 avail. regs required"));
 
-  VERBOSE(0, ("%i %i", regX, regY));
+  VERBOSE(1, ("%i %i", regX, regY));
 
   // X = 'offset'    ;   Y = 0
   // X = X/Y  -> SIGFPE only if the machine supports the DIV operation and result isn't turned into zero.
@@ -385,7 +389,7 @@ void Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, t_bbl*
   std::stringstream sstream;
   sstream << "iFFFFFFFF" << "R00R01^^";
   sstream << "\\" << WRITE_32;
-  VERBOSE(0, ("%s", sstream.str().c_str()));
+  VERBOSE(1, ("%s", sstream.str().c_str()));
   t_reloc* reloc = RelocTableAddRelocToRelocatable(
       OBJECT_RELOC_TABLE(obj),
       AddressNullForObject(obj), /* addend */
@@ -399,6 +403,8 @@ void Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, t_bbl*
       T_RELOCATABLE(div_ins), /* sec */ //R01 confirmed
       sstream.str().c_str());
   ArmInsMakeAddressProducer(numerator_ins, 0 /* immediate */, reloc);
+
+  return div_ins;
 }
 
 bool Obfus_segv_abstract::obfus_is_legal_INS_LOAD_STORE_MANY(t_bbl* bbl, t_arm_ins* arm_ins)
@@ -416,7 +422,7 @@ bool Obfus_segv_abstract::obfus_is_legal_INS_LOAD_STORE_MANY(t_bbl* bbl, t_arm_i
 t_uint32 Obfus_m_segv_1::obfus_generate_random_ill_addr(t_uint32 immed, bool neg_immed)
 {
   //    http://static.duartes.org/img/blogPosts/linuxFlexibleAddressSpaceLayout.png
-  VERBOSE(0,("\t immed value:%i",immed));
+  VERBOSE(1,("\t immed value:%i",immed));
   t_uint32 rnd, min, max;
   if (RNGGenerateBool(data->rng)) {
     min = 0x0;
@@ -431,7 +437,7 @@ t_uint32 Obfus_m_segv_1::obfus_generate_random_ill_addr(t_uint32 immed, bool neg
   } else if (!neg_immed && rnd + immed >= min && rnd + immed < max) {
     return rnd;
   } else {
-    VERBOSE(0,("\t immed value:%i turned ill_addr into legal_addr, retrying...", immed));
+    VERBOSE(1,("\t immed value:%i turned ill_addr into legal_addr, retrying...", immed));
     return obfus_generate_random_ill_addr(immed, neg_immed);
   }
 }
@@ -496,7 +502,7 @@ void Obfus_m_segv_1::obfus_fill_stack_from_bbl(s_bbl* rbbl, s_ins* rsins, std::s
       if (ARM_INS_CADDRESS(tmparmins) > 0) {
         opc = ARM_INS_OPCODE(tmparmins);
 
-        VERBOSE(0, ("\t push onto stack: @G, type:%s%i, regA: %i, regB: %i, regC: %i, immed: %s%i",
+        VERBOSE(1, ("\t push onto stack: @G, type:%s%i, regA: %i, regB: %i, regC: %i, immed: %s%i",
               ARM_INS_CADDRESS(tmparmins), (opc == ARM_ADD ? " ADD " : opc == ARM_SUB ? " SUB " : "     "),
               ARM_INS_TYPE(tmparmins), ARM_INS_REGA(tmparmins),
               ARM_INS_REGB(tmparmins),
@@ -641,7 +647,7 @@ pair<s_bbl*, s_bbl*> Obfus_m_segv_1::obfus_perform_split(std::pair<t_arm_ins*, s
         FATAL(("Something is terribly wrong with the code"));
     }
 
-    VERBOSE(0, ("\t going to split on instr @G of BBL @G",ARM_INS_CADDRESS(pairSplit.first), BBL_CADDRESS(rbbl->bbl) ));
+    VERBOSE(1, ("\t going to split on instr @G of BBL @G",ARM_INS_CADDRESS(pairSplit.first), BBL_CADDRESS(rbbl->bbl) ));
     t_bbl* tmp = BblSplitBlock(rbbl->bbl, T_INS(pairSplit.first), TRUE); //fallthrough edge created automatically
 
     s_bbl* bblNext = new s_bbl();
@@ -654,7 +660,7 @@ pair<s_bbl*, s_bbl*> Obfus_m_segv_1::obfus_perform_split(std::pair<t_arm_ins*, s
 
     s_bbl* it = rbbl;//ins_map_rw[pos];
     while (it) {
-      VERBOSE(0, ("\t bbl @G ; next %i",BBL_CADDRESS(it->bbl),(it->next)));
+      VERBOSE(1, ("\t bbl @G ; next %i",BBL_CADDRESS(it->bbl),(it->next)));
       it = it->next;
     }
     return make_pair(rbbl, bblNext); // <old, new>
@@ -668,9 +674,9 @@ std::pair<int, s_bbl*> Obfus_m_segv_1::obfus_prepare_rbbl(s_bbl* rbbl, s_ins* rs
     if (enforceDummyInstructions)
       return std::make_pair(2, (s_bbl*)NULL);
     else
-      VERBOSE(0, ("\t processing first ins in BBL."));
+      VERBOSE(1, ("\t processing first ins in BBL."));
   } else { // we have to split rbbl->bbl so that we have a block with a LDR/STR instruction.
-    VERBOSE(0, ("\t processing non-first ins in BBL."));
+    VERBOSE(1, ("\t processing non-first ins in BBL."));
   }
   t_regset LBBL = obfus_get_used_registers_current_state(bbl);
   t_reg tmpr;
@@ -681,9 +687,9 @@ std::pair<int, s_bbl*> Obfus_m_segv_1::obfus_prepare_rbbl(s_bbl* rbbl, s_ins* rs
   if (st.empty()){
     return std::make_pair(2, (s_bbl*)NULL);
   }
-  VERBOSE(0, ("\t before stack size:%i", st.size()));
+  VERBOSE(1, ("\t before stack size:%i", st.size()));
   pairSplit = obfus_process_stack_get_pairSplit(rbbl->bbl, rsins, LBBL, st, vfilINS);
-  VERBOSE(0, ("\t after stack size:%i", vfilINS.size()));
+  VERBOSE(1, ("\t after stack size:%i", vfilINS.size()));
   if (vfilINS.size() == 1 && enforceDummyInstructions)
     return std::make_pair(2, (s_bbl*)NULL);  //if we wish to have at least one dummy instruction before the STR/LDR:
   else
@@ -709,7 +715,7 @@ pair<s_bbl*, s_ins*> Obfus_m_segv_1::obfus_get_random_struct(vector<s_bbl*>& ins
   if (delete_INS_BBL_FromMapping)
     data->delete_from_ins_map(ins_map, rbbl, rsins); // do not re-use same <INS,BBL>
 
-  VERBOSE(0, ("\t random (%i) branch addr: @G ins: @G, regB: %i, regC: %i", ri, BBL_CADDRESS(rbbl->bbl),ARM_INS_CADDRESS(rsins->ins), rsins->B, rsins->C));
+  VERBOSE(1, ("\t random (%i) branch addr: @G ins: @G, regB: %i, regC: %i", ri, BBL_CADDRESS(rbbl->bbl),ARM_INS_CADDRESS(rsins->ins), rsins->B, rsins->C));
 
   return make_pair(rbbl, rsins);
 }
@@ -717,9 +723,9 @@ pair<s_bbl*, s_ins*> Obfus_m_segv_1::obfus_get_random_struct(vector<s_bbl*>& ins
 short int Obfus_m_segv_1::obfus_process_rbbl(t_bbl* bbl, bool isThumb, s_bbl*& rbbl, s_ins* rsins, vector<t_arm_ins*>& vfilINS, pair<t_arm_ins*, s_bbl*>& pairSplit)
 {
   std::pair<int, s_bbl*> ppair = obfus_prepare_rbbl(rbbl, rsins, bbl, vfilINS, pairSplit);
-  VERBOSE(0, ("\t ppair %i", ppair.first));
+  VERBOSE(1, ("\t ppair %i", ppair.first));
   if (ppair.first == 2) {
-    VERBOSE(0, ("\t recursion required...\n"));
+    VERBOSE(1, ("\t recursion required...\n"));
     return 2; //recursion
   }  else {
     rbbl = ppair.second;
@@ -727,7 +733,7 @@ short int Obfus_m_segv_1::obfus_process_rbbl(t_bbl* bbl, bool isThumb, s_bbl*& r
   }
 }
 
-void Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
@@ -750,7 +756,7 @@ void Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available, t_bbl
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
   // add instructions to alter regB and generate an ill_addr.
   obfus_add_illegal_address(bbl, isThumb, rsins->B, rsins->immed, rsins->neg_immed);
 
@@ -759,10 +765,12 @@ void Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available, t_bbl
   // finally create edge matching the jump instruction is CFG.
   t_uint32 edge_jump_type = rbbl->bbl == bbl ? ET_JUMP : ET_IPJUMP;
   CfgEdgeCreate(data->cfg, bbl, rbbl->bbl, edge_jump_type);
-  VERBOSE(0, ("edge create %02X %02X", BBL_CADDRESS(bbl), BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("edge create %02X %02X", BBL_CADDRESS(bbl), BBL_CADDRESS(rbbl->bbl)));
+
+  return rsins->ins;
 }
 
-void Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   /*
      Works quite similar to method_1 except that the ill_addr isn't a random number,
@@ -796,7 +804,7 @@ void Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 
   //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb); // add Nop to make searching in asm easier !!! remove in production !!!
   // create dummy 'mov' which will be changed by AddressProducer into an ill_addr_encoded_offset.
@@ -819,7 +827,7 @@ void Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl
   else
     sstreamops << "_";
   sstream << sstreamops.str() << "\\" << WRITE_32;
-  VERBOSE(0, ("%s", sstream.str().c_str()));
+  VERBOSE(1, ("%s", sstream.str().c_str()));
 
   t_reloc* reloc = RelocTableAddRelocToRelocatable(
       OBJECT_RELOC_TABLE(obj),
@@ -834,9 +842,11 @@ void Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl
       T_RELOCATABLE(ins_LDR_STR), /* sec */ //R01 confirmed
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
+
+  return ins_LDR_STR;
 }
 
-void Obfus_m_segv_3::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_3::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   /*
      Works quite similar to method_2
@@ -879,7 +889,7 @@ void Obfus_m_segv_3::encode_signalling(t_object* obj, t_regset& available, t_bbl
   sstream <<  "iFFFFFFFF" << "R00R01";
   sstreamops << "^^";
   sstream << sstreamops.str() << "\\" << WRITE_32;
-  VERBOSE(0, ("%s", sstream.str().c_str()));
+  VERBOSE(1, ("%s", sstream.str().c_str()));
 
 
   t_reloc* reloc = RelocTableAddRelocToRelocatable(
@@ -895,6 +905,8 @@ void Obfus_m_segv_3::encode_signalling(t_object* obj, t_regset& available, t_bbl
       T_RELOCATABLE(ins_LDR_STR), /* sec */ //R01 confirmed
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
+
+  return ins_LDR_STR;
 }
 
 void Obfus_m_segv_4::obfus_do_const_analysis(t_bbl* bbl, vector<pair<t_reg, t_uint32>>& vregConst)
@@ -929,18 +941,18 @@ bool Obfus_m_segv_4::obfus_process_stack_get_pairSplit_regB_check(std::pair<t_ar
 
     vector<pair<t_reg, t_uint32>> vregConst;
     obfus_do_const_analysis(pairSplit.second->bbl, vregConst);
-    VERBOSE(0, ("vregConst size: %i", vregConst.size()));
+    VERBOSE(1, ("vregConst size: %i", vregConst.size()));
 
     bool rB = false, rC = false;
     for (unsigned int i = 0; i < vregConst.size(); i++) {
 
-      VERBOSE(0, ("\t vregConst[i] := %02X", vregConst[i].second));
+      VERBOSE(1, ("\t vregConst[i] := %02X", vregConst[i].second));
 
-      VERBOSE(0, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGB(LDR_STR)));
+      VERBOSE(1, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGB(LDR_STR)));
       if (rB == false && vregConst[i].first == ARM_INS_REGB(LDR_STR))
         rB = true;
 
-      VERBOSE(0, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGC(LDR_STR)));
+      VERBOSE(1, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGC(LDR_STR)));
       if (rC == false && (vregConst[i].first == ARM_INS_REGC(LDR_STR) || ARM_REG_NONE == ARM_INS_REGC(LDR_STR)))
         rC = true; //could be immediate as well
 
@@ -955,7 +967,7 @@ bool Obfus_m_segv_4::obfus_process_stack_get_pairSplit_regB_check(std::pair<t_ar
   return true;
 }
 
-void Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
@@ -971,11 +983,11 @@ void Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl
     if (vregConst.empty()) {
       it = vfil.erase(it); //allow only BBLs that have a known CTE reg
     } else {
-      VERBOSE(0, ("\t\t vregConst.size() := %i", vregConst.size()));
+      VERBOSE(1, ("\t\t vregConst.size() := %i", vregConst.size()));
       ++it;
     }
   }
-  VERBOSE(0, ("\t m4 vfil size: %i", vfil.size()));
+  VERBOSE(1, ("\t m4 vfil size: %i", vfil.size()));
 
   t_arm_ins* arm_ins;
   bool isThumb = ArmBblIsThumb(bbl);
@@ -991,7 +1003,7 @@ void Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 
   //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb); // add Nop to make searching in asm easier !!! remove in production !!!
   // create dummy 'mov' which will be changed by AddressProducer into an ill_addr_encoded_offset.
@@ -1014,7 +1026,7 @@ void Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl
   else
     sstream << "_";
   sstream << "\\" << WRITE_32;
-  VERBOSE(0, (sstream.str().c_str()));
+  VERBOSE(1, (sstream.str().c_str()));
 
 
   t_reloc* reloc = RelocTableAddRelocToRelocatable(
@@ -1031,7 +1043,9 @@ void Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 , reloc);     // immediate : 0
 
-  VERBOSE(0,("\n"));
+  VERBOSE(1,("\n"));
+
+  return ins_LDR_STR;
 }
 
 void Obfus_m_segv_4_revised::obfus_do_const_analysis(t_bbl* bbl, vector<pair<t_reg, t_uint32>>& vregConst)
@@ -1065,18 +1079,18 @@ bool Obfus_m_segv_4_revised::obfus_process_stack_get_pairSplit_regB_check(std::p
 
     vector<pair<t_reg, t_uint32>> vregConst;
     obfus_do_const_analysis(pairSplit.second->bbl, vregConst);
-    VERBOSE(0, ("vregConst size: %i", vregConst.size()));
+    VERBOSE(1, ("vregConst size: %i", vregConst.size()));
 
     bool rB = false, rC = false;
     for (unsigned int i = 0; i < vregConst.size(); i++) {
 
-      VERBOSE(0, ("\t vregConst[i] := %02X", vregConst[i].second));
+      VERBOSE(1, ("\t vregConst[i] := %02X", vregConst[i].second));
 
-      VERBOSE(0, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGB(LDR_STR)));
+      VERBOSE(1, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGB(LDR_STR)));
       if (rB == false && vregConst[i].first == ARM_INS_REGB(LDR_STR))
         rB = true;
 
-      VERBOSE(0, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGC(LDR_STR)));
+      VERBOSE(1, ("\t r%i   =?  r%i",vregConst[i].first, ARM_INS_REGC(LDR_STR)));
       if (rC == false && (vregConst[i].first == ARM_INS_REGC(LDR_STR) || ARM_REG_NONE == ARM_INS_REGC(LDR_STR)))
         rC = true; //could be immediate as well
 
@@ -1116,7 +1130,7 @@ void Obfus_m_segv_4_revised::postProcess()
   data->generate_instruction_maps();
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
-  VERBOSE(0, ("vm4:%i", vm4.size()));
+  VERBOSE(1, ("vm4:%i", vm4.size()));
   for (unsigned int i = 0; i < vm4.size(); i++) {
     sm4* sm = vm4[i];
     t_object* obj = sm->obj;
@@ -1135,8 +1149,8 @@ void Obfus_m_segv_4_revised::postProcess()
     vector<pair<t_reg, t_uint32>> vregConst;
     vector<s_bbl*>::iterator it = vfil.begin();
     obfus_do_const_analysis(bbl, vregConst);
-    VERBOSE(0, ("\t\t vregConst.size() := %i", vregConst.size()));
-    VERBOSE(0, ("\t m4 vfil size: %i", vfil.size()));
+    VERBOSE(1, ("\t\t vregConst.size() := %i", vregConst.size()));
+    VERBOSE(1, ("\t m4 vfil size: %i", vfil.size()));
 
     ASSERT(vregConst.size() > 0, ("Not a single reg with known cte found for current BBL 0x%02X", BBL_CADDRESS(bbl)));
 
@@ -1154,7 +1168,7 @@ void Obfus_m_segv_4_revised::postProcess()
     s_bbl* rbbl = rpair.first;
     s_ins* rsins = rpair.second;
     rbbl = obfus_perform_split(pairSplit, false).second;
-    VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+    VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 
     //ArmMakeInsForBbl(Noop, Append, arm_ins, bbl, isThumb); // add Nop to make searching in asm easier !!! remove in production !!!
     // create dummy 'mov' which will be changed by AddressProducer into an ill_addr_encoded_offset.
@@ -1178,7 +1192,7 @@ void Obfus_m_segv_4_revised::postProcess()
     else
       sstream << "_";
     sstream << "\\" << WRITE_32;
-    VERBOSE(0, (sstream.str().c_str()));
+    VERBOSE(1, (sstream.str().c_str()));
 
     t_reloc* reloc = RelocTableAddRelocToRelocatable(
         OBJECT_RELOC_TABLE(obj),
@@ -1194,12 +1208,12 @@ void Obfus_m_segv_4_revised::postProcess()
         sstream.str().c_str());
     ArmInsMakeAddressProducer(ill_ins_encoded, 0 , reloc);     // immediate : 0
 
-    VERBOSE(0,("\n"));
+    VERBOSE(1,("\n"));
   }
 
 }
 
-void Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   sm4* s = new sm4();
   s->obj = obj;
@@ -1207,6 +1221,8 @@ void Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_regset& availabl
   s->obfus_final_bbl = bbl;
   s->target = target;
   vm4.push_back(s);
+
+  return NULL;
 }
 
 void Obfus_m_segv_5::available_with_other_bbl(s_bbl* rbbl, s_ins* rsins, t_regset& available, t_regset& ret)
@@ -1263,7 +1279,7 @@ unsigned int Obfus_m_segv_5::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset&
   return 0;
 }
 
-void Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = false; // we set this to false since we will be adding custom instructions ; 'true' can be fatal and too restrictive for small applications.
 
@@ -1300,12 +1316,12 @@ void Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl
         if (!findOptimalRegset)
           break; //alright, we found one
       }
-      VERBOSE(0, ("------------"));
+      VERBOSE(1, ("------------"));
     }
   }
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
-  VERBOSE(0, ("  ==========  "));
+  VERBOSE(1, ("  ==========  "));
   // bestPairSplit not found ; re-building the program could help to have more luck
   ASSERT(bestPairSplit.first != NULL, ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   printLBBL(bestRegs, "final bestRegs: ");
@@ -1339,7 +1355,7 @@ void Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl
   }
   rbbl = psp.first;
 
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
   unsigned int addedValue = insert_addr_ins(rbbl->bbl, isThumb, bestRegs, rsins->B);
 
 
@@ -1364,7 +1380,7 @@ void Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl
     sstream << "_";
   sstream << "+" << "\\" << WRITE_32;
 
-  VERBOSE(0, (sstream.str().c_str()));
+  VERBOSE(1, (sstream.str().c_str()));
 
   t_reloc* reloc = RelocTableAddRelocToRelocatable(
       OBJECT_RELOC_TABLE(obj),
@@ -1380,8 +1396,9 @@ void Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 , reloc);     // immediate : 0
 
-  VERBOSE(0,("\n"));
+  VERBOSE(1,("\n"));
 
+  return ins_LDR_STR;
 }
 
 unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg)
@@ -1391,9 +1408,9 @@ unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset&
   t_reg tmpr = ARM_REG_NONE;
   t_reg tmprr = ARM_REG_NONE;
 
-  VERBOSE(0, ("insert_addr_ins::"));
+  VERBOSE(1, ("insert_addr_ins::"));
   REGSET_FOREACH_REG(regs, tmpr)
-    VERBOSE(0, ("\t r%i", tmpr));
+    VERBOSE(1, ("\t r%i", tmpr));
 
   // init array
   short int m = 0;
@@ -1413,7 +1430,7 @@ unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset&
 
   unsigned int tot = 0;
   REGSET_FOREACH_REG(regs, tmpr) {
-    VERBOSE(0, ("vb[r%i] = vb[r%i]%i + vb[r%i]%i",tmpr,tmpr, vb[tmpr], tmprr, vb[tmprr]));
+    VERBOSE(1, ("vb[r%i] = vb[r%i]%i + vb[r%i]%i",tmpr,tmpr, vb[tmpr], tmprr, vb[tmprr]));
     vb[tmpr] = vb[tmpr] + vb[tmprr];
     tot = vb[tmpr];
     ArmMakeInsForBbl(Add, Append, arm_ins, bbl, isThumb, tmpr, tmprr, tmpr, 0, ARM_CONDITION_AL);
@@ -1424,7 +1441,7 @@ unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset&
   return tot;
 }
 
-void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = true;
 
@@ -1450,7 +1467,7 @@ void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl
 
     if (processi == 0) {//let us test whether this solution is usable or not ::
       for (int i = 0; i < (int)vfilINS.size(); i++)
-        VERBOSE(0, ("\t vfilINS: @G, type:%i, regA: %i, regB: %i, regC: %i, immed: %i",ARM_INS_CADDRESS(vfilINS[i]), ARM_INS_TYPE(vfilINS[i]), ARM_INS_REGA(vfilINS[i]), ARM_INS_REGB(vfilINS[i]), ARM_INS_REGC(vfilINS[i]), ARM_INS_IMMEDIATE(vfilINS[i])));
+        VERBOSE(1, ("\t vfilINS: @G, type:%i, regA: %i, regB: %i, regC: %i, immed: %i",ARM_INS_CADDRESS(vfilINS[i]), ARM_INS_TYPE(vfilINS[i]), ARM_INS_REGA(vfilINS[i]), ARM_INS_REGB(vfilINS[i]), ARM_INS_REGC(vfilINS[i]), ARM_INS_IMMEDIATE(vfilINS[i])));
 
       // init rest :: contains all registers we may use for insert_addr_ins.
       rest = RegsetNew();
@@ -1461,7 +1478,7 @@ void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl
 
       //lets use a random number of available registers (enhance randomness) ::
       short int N_rand_regs = RNGGenerateWithRange(data->rng, 1, RegsetCountRegs(rest));
-      VERBOSE(0, ("We have %i available registers, but N_rand_regs := %i", RegsetCountRegs(rest), N_rand_regs));
+      VERBOSE(1, ("We have %i available registers, but N_rand_regs := %i", RegsetCountRegs(rest), N_rand_regs));
       short int j = 0;
       REGSET_FOREACH_REG(rest, tmpr)
         if (++j > N_rand_regs)
@@ -1483,7 +1500,7 @@ void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 
 
   // create dummy 'mov' which will be changed by AddressProducer into an ill_addr_encoded_offset.
@@ -1511,7 +1528,7 @@ void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl
     sstreamops << "_";
   sstreamops << "+";
   sstream << sstreamops.str() << "\\" << WRITE_32;
-  VERBOSE(0, ("%s", sstream.str().c_str()));
+  VERBOSE(1, ("%s", sstream.str().c_str()));
 
 
 
@@ -1529,8 +1546,9 @@ void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 , reloc);     // immediate : 0
 
-  VERBOSE(0,("\n"));
+  VERBOSE(1,("\n"));
 
+  return ins_LDR_STR;
 }
 
 void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_relocatable* target, t_regset& rest, bool isThumb, t_object* obj)
@@ -1539,7 +1557,7 @@ void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins,
   t_regset rest_A = RegsetNew();
   RegsetSetDup(rest_A, rest);
   short int N_rand_regs = RNGGenerateWithRange(data->rng, 1, RegsetCountRegs(rest_A));
-  VERBOSE(0, ("We have %i available registers, but N_rand_regs := %i", RegsetCountRegs(rest_A), N_rand_regs));
+  VERBOSE(1, ("We have %i available registers, but N_rand_regs := %i", RegsetCountRegs(rest_A), N_rand_regs));
   short int j = 0;
   t_reg tmpr;
   REGSET_FOREACH_REG(rest_A, tmpr)
@@ -1554,7 +1572,7 @@ void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins,
   t_arm_ins* ins_LDR_STR = rsins->ins; // *from* this instruction, the offset will be calculated, to *to* migrated fragment.
 
   unsigned int addedValue = insert_addr_ins(from_bbl, isThumb, rest_A, rsins->B);
-  VERBOSE(0, ("addedValue: %02x", addedValue));
+  VERBOSE(1, ("addedValue: %02x", addedValue));
 
   if (cond == ARM_CONDITION_AL)
     ArmMakeInsForBbl(UncondBranch, Append, arm_ins, from_bbl, isThumb); // add a jump instruction.
@@ -1562,7 +1580,7 @@ void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins,
     ArmMakeInsForBbl(CondBranch, Append, arm_ins, from_bbl, isThumb, cond); // add a jump instruction.
 
   t_uint32 edge_jump_type = rbbl->bbl == from_bbl ? ET_JUMP : ET_IPJUMP;
-  VERBOSE(0, ("Edge from @G to @G.", BBL_CADDRESS(from_bbl), BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("Edge from @G to @G.", BBL_CADDRESS(from_bbl), BBL_CADDRESS(rbbl->bbl)));
   CfgEdgeCreate(data->cfg, from_bbl, rbbl->bbl, edge_jump_type); // finally create edge matching the jump instruction is CFG.
 
   std::stringstream sstream, sstreamops, simmed, simmed2; //encode immed value into 32bit hex value (8 hex chars).
@@ -1576,7 +1594,7 @@ void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins,
     sstreamops << "_";
   sstreamops << "+";
   sstream << sstreamops.str() << "\\" << WRITE_32;
-  VERBOSE(0, ("%s", sstream.str().c_str()));
+  VERBOSE(1, ("%s", sstream.str().c_str()));
 
   t_reloc* reloc = RelocTableAddRelocToRelocatable(
       OBJECT_RELOC_TABLE(obj),
@@ -1635,7 +1653,7 @@ t_arm_condition_code Obfus_m_segv_7::random_cond()
   }
 }
 
-void Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = true;
 
@@ -1661,7 +1679,7 @@ void Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl
 
     if (processi == 0) {//let us test whether this solution is usable or not ::
       for (int i = 0; i < (int)vfilINS.size(); i++)
-        VERBOSE(0, ("\t vfilINS: @G, type:%i, regA: %i, regB: %i, regC: %i, immed: %i",ARM_INS_CADDRESS(vfilINS[i]), ARM_INS_TYPE(vfilINS[i]), ARM_INS_REGA(vfilINS[i]), ARM_INS_REGB(vfilINS[i]), ARM_INS_REGC(vfilINS[i]), ARM_INS_IMMEDIATE(vfilINS[i])));
+        VERBOSE(1, ("\t vfilINS: @G, type:%i, regA: %i, regB: %i, regC: %i, immed: %i",ARM_INS_CADDRESS(vfilINS[i]), ARM_INS_TYPE(vfilINS[i]), ARM_INS_REGA(vfilINS[i]), ARM_INS_REGB(vfilINS[i]), ARM_INS_REGC(vfilINS[i]), ARM_INS_IMMEDIATE(vfilINS[i])));
 
       // init rest :: contains all registers we may use for insert_addr_ins.
       rest = RegsetNew();
@@ -1686,7 +1704,7 @@ void Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 
 
   t_arm_condition_code rcond = random_cond(); // one may also use the proposed strategy as in segv_8 ; instead of picking a random condition for branch.
@@ -1695,7 +1713,9 @@ void Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl
   t_bbl* bbl_A = BblSplitBlock(bbl, T_INS(BBL_INS_LAST(bbl)), FALSE /* before */); // brand new/empty BBL **fallthrough edge created automatically
   insert_ctx_code(bbl_A, rbbl, rsins, ARM_CONDITION_AL, target, rest, isThumb, obj);
   insert_ctx_code(bbl, rbbl, rsins, rcond, target, rest, isThumb, obj);
-  VERBOSE(0,("\n"));
+  VERBOSE(1,("\n"));
+
+  return rsins->ins;
 }
 
 void Obfus_m_segv_8::find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, bool isThumb, t_regset& available, vector<s_bbl*>& vfil)
@@ -1711,7 +1731,7 @@ void Obfus_m_segv_8::find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bb
     processi = obfus_process_rbbl(bbl, isThumb, rpair.first, rpair.second, vfilINS, pairSplit);
     if (processi == 0) {//let us test whether this solution is usable or not ::
       for (int i = 0; i < (int)vfilINS.size(); i++)
-        VERBOSE(0, ("\t vfilINS: @G, type:%i, regA: %i, regB: %i, regC: %i, immed: %i",ARM_INS_CADDRESS(vfilINS[i]), ARM_INS_TYPE(vfilINS[i]), ARM_INS_REGA(vfilINS[i]), ARM_INS_REGB(vfilINS[i]), ARM_INS_REGC(vfilINS[i]), ARM_INS_IMMEDIATE(vfilINS[i])));
+        VERBOSE(1, ("\t vfilINS: @G, type:%i, regA: %i, regB: %i, regC: %i, immed: %i",ARM_INS_CADDRESS(vfilINS[i]), ARM_INS_TYPE(vfilINS[i]), ARM_INS_REGA(vfilINS[i]), ARM_INS_REGB(vfilINS[i]), ARM_INS_REGC(vfilINS[i]), ARM_INS_IMMEDIATE(vfilINS[i])));
       // init rest :: contains all registers we may use for insert_addr_ins.
       rest = RegsetNew();
       REGSET_FOREACH_REG(available, tmpr)
@@ -1732,8 +1752,8 @@ void Obfus_m_segv_8::find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bb
   }
   rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
-  VERBOSE(0, ("current BBL: @G", BBL_CADDRESS(bbl)));
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("current BBL: @G", BBL_CADDRESS(bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 }
 
 t_arm_condition_code Obfus_m_segv_8::determine_condition_based_on_flag(t_bbl* bbl)
@@ -1751,13 +1771,13 @@ t_arm_condition_code Obfus_m_segv_8::determine_condition_based_on_flag(t_bbl* bb
   t_regset liveFlags = RegsetIntersect(live, flags);
   short int N = RegsetCountRegs(liveFlags);
   t_reg tmpr;
-  VERBOSE(0, ("liveFlags %i", N));
+  VERBOSE(1, ("liveFlags %i", N));
   if (N > 0) {
     //let us choose a random condition based on a live flag
     short int R = RNGGenerateWithRange(data->rng, 0, N-1);
     short int i = 0;
     REGSET_FOREACH_REG(liveFlags, tmpr) {
-      VERBOSE(0, ("r%i", tmpr));
+      VERBOSE(1, ("r%i", tmpr));
       if (i++ == R)
         break;
     }
@@ -1779,7 +1799,7 @@ t_arm_condition_code Obfus_m_segv_8::determine_condition_based_on_flag(t_bbl* bb
   return ARM_CONDITION_AL; // all flags are dead
 }
 
-void Obfus_m_segv_8::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_8::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = true;
   delete_INS_BBL_FromMapping = false; //for small applications it may not find enough distinct instructions to branch to.
@@ -1831,9 +1851,11 @@ void Obfus_m_segv_8::encode_signalling(t_object* obj, t_regset& available, t_bbl
   insert_ctx_code(bbl, rbblB, rsinsB, rcond, target, restB, isThumb, obj);
   //add branch
   insert_ctx_code(bbl_A, rbblA, rsinsA, ARM_CONDITION_AL, target, restA, isThumb, obj);
+
+  return NULL;
 }
 
-void Obfus_m_segv_9::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_9::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
@@ -1873,7 +1895,7 @@ void Obfus_m_segv_9::encode_signalling(t_object* obj, t_regset& available, t_bbl
   sstream << "iC0000000" << "R00";
   sstreamops << "+";
   sstream << sstreamops.str() << "\\" << WRITE_32;
-  VERBOSE(0, ("%s", sstream.str().c_str()));
+  VERBOSE(1, ("%s", sstream.str().c_str()));
 
   /*  we use 0xC0000000 instead of 0xFFFFFFFF
       simply because eg: 0xFFFFFFFF - 0x800C = 0xFFFF7FF3
@@ -1896,9 +1918,11 @@ void Obfus_m_segv_9::encode_signalling(t_object* obj, t_regset& available, t_bbl
       NULL, /* sec */ //R01 confirmed
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
+
+  return arm_ins;
 }
 
-void Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+t_arm_ins* Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   delete_INS_BBL_FromMapping = false; //for small applications it may not find enough distinct instructions to branch to.
 
@@ -1924,7 +1948,7 @@ void Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bb
   s_bbl* rbbl = rpair.first;
   s_ins* rsins = rpair.second;
   rbbl = obfus_perform_split(pairSplit, false).second;
-  VERBOSE(0, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
+  VERBOSE(1, ("\t jump to BBL @G",BBL_CADDRESS(rbbl->bbl)));
 
   /* push/preserve LR register, since a BLX can disrupt its value ; debugger will restore it using stack */
   ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, 1 << ARM_REG_R14, ARM_CONDITION_AL, isThumb);
@@ -1946,7 +1970,7 @@ void Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bb
   sstream << "iC0000000" << "R00";
   sstreamops << "+";
   sstream << sstreamops.str() << "\\" << WRITE_32;
-  VERBOSE(0, ("%s", sstream.str().c_str()));
+  VERBOSE(1, ("%s", sstream.str().c_str()));
   /*  we use 0xC0000000 instead of 0xFFFFFFFF
       simply because eg: s0xFFFFFFFF - 0x800C = 0xFFFF7FF3
       when the branch happens, the kernel/CPU will correct it
@@ -1968,4 +1992,6 @@ void Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bb
       NULL, /* sec */ //R01 confirmed
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
+
+  return ins_BRANCH;
 }

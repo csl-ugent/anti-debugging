@@ -38,6 +38,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
     t_function* function_ldr;
     t_function* function_stm;
     t_function* function_str;
+    static const bool dump_metrics = false;
 
     /* Variables for the Key-Value map used by the debugger to find which code to execute */
     t_symbol* target_map_sym;
@@ -47,6 +48,8 @@ class SelfDebuggingTransformer : public AbstractTransformer
 
     /* The constants used by the map as key */
     std::vector<t_uint32> constants;
+    std::vector<t_bool> targets_migrated;
+    std::vector<t_arm_ins*> signaling_ins;
 
     /* The obfuscator instance */
     std::unique_ptr<ObfusData> obfusData;
@@ -54,7 +57,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
     /*** FUNCTIONS ***/
   private:
     /* Private helper functions */
-    t_uint32 TargetMapAddEntry(t_relocatable* target);
+    t_uint32 TargetMapAddEntry(t_relocatable* target, t_bool is_migrated_target);
     void PrepareCfg (t_cfg* cfg);
     void TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins);
     void TransformLdr(t_bbl* bbl, t_arm_ins* orig_ins);
@@ -72,6 +75,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
   public:
     void AddForceReachables (std::vector<std::string>& reachable_vector);
     void TransformObject ();
+    virtual void FinalizeTransform ();/* This function is to be called after deflowgraphing but before assembling of the main object */
 
     /* Constructor and destructor */
     SelfDebuggingTransformer (t_object* obj, t_const_string output_name);

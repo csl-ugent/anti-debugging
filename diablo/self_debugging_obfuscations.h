@@ -73,7 +73,7 @@ class Obfus {
     virtual ~Obfus() {}
     static void choose_method(std::unique_ptr<Obfus>& obfus, const t_regset available, t_bool incoming_edge, ObfusData* data);
     virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant);
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target) = 0;
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target) = 0;
 };
 
 // concrete implementations:
@@ -81,7 +81,7 @@ class Obfus_m_bkpt_1 			: public Obfus {
   // original BKPT method
   public:
     Obfus_m_bkpt_1(ObfusData* data) : Obfus(data) {};
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // SIGFPE and SIGILL methods:
@@ -92,7 +92,7 @@ class Obfus_m_fpe_1 			: public Obfus {
   // It is highly advised to use this method for experimental/educational purposes only.
   public:
     Obfus_m_fpe_1(ObfusData* data) : Obfus(data) {};
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_fpe_2 			: public Obfus {
@@ -103,7 +103,7 @@ class Obfus_m_fpe_2 			: public Obfus {
   public:
     Obfus_m_fpe_2(ObfusData* data) : Obfus(data) {};
     virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // SIGSEGV methods:
@@ -137,7 +137,7 @@ class Obfus_m_segv_1 			: public Obfus_segv_abstract {
 
   public:
     Obfus_m_segv_1(ObfusData* data, bool enforceDummyInstructions) : Obfus_segv_abstract(data, enforceDummyInstructions) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_2 			: public Obfus_m_segv_1 {
@@ -145,14 +145,14 @@ class Obfus_m_segv_2 			: public Obfus_m_segv_1 {
   public:
     Obfus_m_segv_2(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_1(data, enforceDummyInstructions) {}
     virtual void encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_uint32 adr_size, t_uint32 constant) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_3 			: public Obfus_m_segv_2 {
   // simplified version of m_2: insert a random STR/LDR instead of jumping to existing one.
   public:
     Obfus_m_segv_3(ObfusData* data) : Obfus_m_segv_2(data, false) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -180,7 +180,7 @@ class Obfus_m_segv_4 			: public Obfus_m_segv_2 {
 
   public:
     Obfus_m_segv_4(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) { FATAL(("DEPRECATED")); }
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -216,7 +216,7 @@ class Obfus_m_segv_4_revised 	: public Obfus_m_segv_4 {
   public:
     Obfus_m_segv_4_revised(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_4(data, enforceDummyInstructions) { FATAL(("DEPRECATED")); }
     virtual void postProcess();
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 // DEPRECATED ::
@@ -245,7 +245,7 @@ class Obfus_m_segv_5 			: public Obfus_m_segv_2 {
 
   public:
     Obfus_m_segv_5(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) { FATAL(("DEPRECATED")); }
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_6 			: public Obfus_m_segv_2 {
@@ -270,7 +270,7 @@ class Obfus_m_segv_6 			: public Obfus_m_segv_2 {
 
   public:
     Obfus_m_segv_6(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_7 			: public Obfus_m_segv_6 {
@@ -299,7 +299,7 @@ class Obfus_m_segv_7 			: public Obfus_m_segv_6 {
 
   public:
     Obfus_m_segv_7(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_6(data, enforceDummyInstructions) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_8 			: public Obfus_m_segv_7 {
@@ -328,7 +328,7 @@ class Obfus_m_segv_8 			: public Obfus_m_segv_7 {
 
   public:
     Obfus_m_segv_8(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_7(data, enforceDummyInstructions) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_9      : public Obfus_m_segv_2 {
@@ -344,7 +344,7 @@ class Obfus_m_segv_9      : public Obfus_m_segv_2 {
   */
   public:
     Obfus_m_segv_9(ObfusData* data) : Obfus_m_segv_2(data, false) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 class Obfus_m_segv_10      : public Obfus_m_segv_2 {
@@ -355,7 +355,7 @@ class Obfus_m_segv_10      : public Obfus_m_segv_2 {
   */
   public:
     Obfus_m_segv_10(ObfusData* data, bool enforceDummyInstructions) : Obfus_m_segv_2(data, enforceDummyInstructions) {}
-    virtual void encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
+    virtual t_arm_ins* encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target);
 };
 
 #endif
