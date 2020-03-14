@@ -55,6 +55,8 @@ static size_t addr_size = sizeof(void*);
 /* These variables will be filled in by Diablo */
 t_target_map_entry DIABLO_Debugger_target_map[1] __attribute__((section (".data.target_map"))) = {{ sizeof(DIABLO_Debugger_target_map[0]), 0 }};
 size_t DIABLO_Debugger_nr_of_targets = 42;
+ptrdiff_t DIABLO_Debugger_fault_map[1] __attribute__((section (".data.fault_map"))) = { sizeof(DIABLO_Debugger_fault_map[0]) };
+size_t DIABLO_Debugger_nr_of_faults = 42;
 
 /* These global variables should be made TLS if we want multithreading support */
 static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
@@ -454,6 +456,31 @@ static bool verify_target_destination(uintptr_t dest)
   return false;
 }
 
+static bool verify_fault_address(uintptr_t fault_pc)
+{
+  /* If 'fault_pc' is a valid origin, we should be able to find the corresponding entry in the map */
+  for(size_t iii = 0; iii < DIABLO_Debugger_nr_of_faults; iii++)
+  {
+    ptrdiff_t diff = DIABLO_Debugger_fault_map[iii];
+
+    /* Decode the (possibly mutilated) address value for this entry */
+    uintptr_t val;
+    if (IS_MUTILATED_ADDR_MAPPING) {
+      val = diff ^ (uintptr_t)DIABLO_Debugger_fault_map;
+      val ^= MUTILATION_MASK_ADR_MAP;
+    }
+    else
+      val = diff + (uintptr_t)DIABLO_Debugger_fault_map;
+
+    /* Check whether we have a match */
+    if (val == fault_pc)
+      return true;
+  }
+
+  /* No matching fault address found, probably genuine signal */
+  return false;
+}
+
 static uintptr_t decode_address_fpe(struct pt_regs* regs)
 {
   /*
@@ -632,6 +659,13 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   /* Get the actual current registers of the debuggee */
   struct pt_regs regs;
   ptrace(PTRACE_GETREGS, debuggee_tid, NULL, &regs);
+
+  /* Verify whether this is a valid fault address. If not, we return so that the signal can be passed on to the debuggee */
+  if (!verify_fault_address(regs.uregs[15]))
+  {
+    LOG("Fault address validation failed! Assuming this is an genuine signal...\n");
+    return;
+  }
 
   /* Determine the destination address */
   bool is_selfdebugger = !selfdebugger_pid;

@@ -94,6 +94,57 @@ void Obfus::encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_ui
     ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << const_reg), ARM_CONDITION_AL, isThumb);
 }
 
+void ObfusData::FaultMapAddEntry(t_object* obj, t_arm_ins* fault_ins, const t_reloc* reloc)
+{
+  /* Bookkeeping */
+  faulting_instructions.push_back(fault_ins);
+
+  /* Calculate the offset in the map */
+  t_uint32 offset = (faulting_instructions.size() -1) * fault_map_entry_size;
+
+  /* We need to add the address of the fault to the map. Usually this is simply the address of the faulting instruction (fault_ins).
+   * If a relocation is provided, however, we're dealing with a more complex situation where the fault address is not that of the
+   * faulting instruction, e.g., when it's a BX/BLX to a place you can't execute...
+   */
+  t_reloc* new_reloc;
+  if (reloc)
+  {
+    /* In this case, the provided relocation encodes the faulting address, and we need to duplicate and adapt the relocation so the
+     * required value ends up in the mapping.
+     */
+    t_string old_code = StringDup(RELOC_CODE(reloc));
+    *strchr(old_code, '\\') = '\0';
+    t_const_string new_code = StringConcat2(old_code, "R01-" "\\" WRITE_32);
+    Free(old_code);
+    new_reloc = RelocTableAddRelocToRelocatable(OBJECT_RELOC_TABLE(obj),
+        AddressNullForObject(obj), // addend
+        T_RELOCATABLE(fault_map_sec), // from  R01
+        AddressNewForObject(obj, offset), // from-offset
+        RELOC_TO_RELOCATABLE(reloc)[0], // to  R00
+        AddressNullForObject(obj), // to-offset
+        FALSE, // hell
+        NULL, // edge
+        NULL, // corresp
+        T_RELOCATABLE(fault_map_sec), // sec R01
+        new_code);
+    Free(new_code);
+  }
+  else
+    new_reloc = RelocTableAddRelocToRelocatable(OBJECT_RELOC_TABLE(obj),
+        AddressNullForObject(obj), // addend
+        T_RELOCATABLE(fault_map_sec), // from  R01
+        AddressNewForObject(obj, offset), // from-offset
+        T_RELOCATABLE(fault_ins), // to  R00
+        AddressNullForObject(obj), // to-offset
+        FALSE, // hell
+        NULL, // edge
+        NULL, // corresp
+        T_RELOCATABLE(fault_map_sec), // sec R01
+        "R00R01-" "\\" WRITE_32);
+
+  obfuscate_mapping(obj, new_reloc);
+}
+
 void ObfusData::obfuscate_mapping(t_object* obj, t_reloc* reloc)
 {
   if (IS_MUTILATED_ADDR_MAPPING) {
@@ -116,9 +167,13 @@ void ObfusData::obfuscate_mapping(t_object* obj, t_reloc* reloc)
   }
 }
 
-ObfusData::ObfusData(t_cfg* cfg)
+ObfusData::ObfusData(t_cfg* cfg, t_symbol* fault_map_sym)
   : cfg(cfg)
 {
+  /* Get info on fault map */
+  fault_map_entry_size = SectionGetData32 (T_SECTION(SYMBOL_BASE(fault_map_sym)), SYMBOL_OFFSET_FROM_START(fault_map_sym));
+  fault_map_sec = T_SECTION(SYMBOL_BASE(fault_map_sym));
+
   /* Initialize RNG */
   rng = RNGCreateChild(RNGGetRootGenerator(), "sd_obf");
 
@@ -292,7 +347,7 @@ void ObfusData::intersect_available_and_mapped(t_regset& available, vector<s_bbl
   //VERBOSE(0, ("\t\t possible branch to ins: @G, bbl: @G  using regB: %i, regC: %i",ARM_INS_CADDRESS(vfil[i]->sins->ins), BBL_CADDRESS(vfil[i]->bbl), vfil[i]->sins->B, vfil[i]->sins->C));
 }
 
-t_arm_ins* Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   // Create the breakpoint to switch to the debugger
   t_arm_ins* arm_ins;
@@ -304,10 +359,10 @@ t_arm_ins* Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_regset& available,
   RegsetSetSubReg(regs_use, ARM_REG_CPSR);
   ARM_INS_SET_REGS_USE(arm_ins,regs_use);
 
-  return arm_ins;
+  data->FaultMapAddEntry(obj, arm_ins, NULL);
 }
 
-t_arm_ins* Obfus_m_fpe_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_fpe_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT((RegsetCountRegs(available) >= 2), ("Can not use this signalling encoding: At least 2 available register(s) required!"));
 
@@ -334,10 +389,10 @@ t_arm_ins* Obfus_m_fpe_1::encode_signalling(t_object* obj, t_regset& available, 
   ArmMakeInsForBbl(Mov, Append, arm_ins, bbl, isThumb, regY, ARM_REG_NONE, 0, ARM_CONDITION_AL);
   ArmMakeInsForBbl(Div, Append, arm_ins, bbl, isThumb, regX, regX, regY, 0, ARM_CONDITION_AL);
 
-  return arm_ins;
+  data->FaultMapAddEntry(obj, arm_ins, NULL);
 }
 
-t_arm_ins* Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT((RegsetCountRegs(available) >= 2), ("Can not use this signalling encoding: At least 2 available register(s) required!"));
 
@@ -384,7 +439,7 @@ t_arm_ins* Obfus_m_fpe_2::encode_signalling(t_object* obj, t_regset& available, 
       sstream.str().c_str());
   ArmInsMakeAddressProducer(numerator_ins, 0 /* immediate */, reloc);
 
-  return div_ins;
+  data->FaultMapAddEntry(obj, div_ins, NULL);
 }
 
 bool Obfus_segv_abstract::obfus_is_legal_INS_LOAD_STORE_MANY(t_bbl* bbl, t_arm_ins* arm_ins)
@@ -713,7 +768,7 @@ short int Obfus_m_segv_1::obfus_process_rbbl(t_bbl* bbl, bool isThumb, s_bbl*& r
   }
 }
 
-t_arm_ins* Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
@@ -747,10 +802,10 @@ t_arm_ins* Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available,
   CfgEdgeCreate(data->cfg, bbl, rbbl->bbl, edge_jump_type);
   VERBOSE(1, ("edge create %02X %02X", BBL_CADDRESS(bbl), BBL_CADDRESS(rbbl->bbl)));
 
-  return rsins->ins;
+  data->FaultMapAddEntry(obj, rsins->ins, NULL);
 }
 
-t_arm_ins* Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   /*
      Works quite similar to method_1 except that the ill_addr isn't a random number,
@@ -823,10 +878,10 @@ t_arm_ins* Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available,
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
 
-  return ins_LDR_STR;
+  data->FaultMapAddEntry(obj, ins_LDR_STR, NULL);
 }
 
-t_arm_ins* Obfus_m_segv_3::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_3::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   /*
      Works quite similar to method_2
@@ -886,7 +941,7 @@ t_arm_ins* Obfus_m_segv_3::encode_signalling(t_object* obj, t_regset& available,
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
 
-  return ins_LDR_STR;
+  data->FaultMapAddEntry(obj, ins_LDR_STR, NULL);
 }
 
 void Obfus_m_segv_4::obfus_do_const_analysis(t_bbl* bbl, vector<pair<t_reg, t_uint32>>& vregConst)
@@ -947,7 +1002,7 @@ bool Obfus_m_segv_4::obfus_process_stack_get_pairSplit_regB_check(std::pair<t_ar
   return true;
 }
 
-t_arm_ins* Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
@@ -1025,7 +1080,7 @@ t_arm_ins* Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available,
 
   VERBOSE(1,("\n"));
 
-  return ins_LDR_STR;
+  data->FaultMapAddEntry(obj, ins_LDR_STR, NULL);
 }
 
 void Obfus_m_segv_4_revised::obfus_do_const_analysis(t_bbl* bbl, vector<pair<t_reg, t_uint32>>& vregConst)
@@ -1187,13 +1242,14 @@ void Obfus_m_segv_4_revised::postProcess()
         T_RELOCATABLE(ins_LDR_STR), // sec  //R01 confirmed
         sstream.str().c_str());
     ArmInsMakeAddressProducer(ill_ins_encoded, 0 , reloc);     // immediate : 0
+    data->FaultMapAddEntry(obj, ins_LDR_STR, NULL);
 
     VERBOSE(1,("\n"));
   }
 
 }
 
-t_arm_ins* Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   sm4* s = new sm4();
   s->obj = obj;
@@ -1201,8 +1257,6 @@ t_arm_ins* Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_regset& av
   s->obfus_final_bbl = bbl;
   s->target = target;
   vm4.push_back(s);
-
-  return NULL;
 }
 
 void Obfus_m_segv_5::available_with_other_bbl(s_bbl* rbbl, s_ins* rsins, t_regset& available, t_regset& ret)
@@ -1259,7 +1313,7 @@ unsigned int Obfus_m_segv_5::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset&
   return 0;
 }
 
-t_arm_ins* Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = false; // we set this to false since we will be adding custom instructions ; 'true' can be fatal and too restrictive for small applications.
 
@@ -1378,7 +1432,7 @@ t_arm_ins* Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available,
 
   VERBOSE(1,("\n"));
 
-  return ins_LDR_STR;
+  data->FaultMapAddEntry(obj, ins_LDR_STR, NULL);
 }
 
 unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset& regs, t_reg& ill_reg)
@@ -1421,7 +1475,7 @@ unsigned int Obfus_m_segv_6::insert_addr_ins(t_bbl* bbl, bool isThumb, t_regset&
   return tot;
 }
 
-t_arm_ins* Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = true;
 
@@ -1528,7 +1582,7 @@ t_arm_ins* Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available,
 
   VERBOSE(1,("\n"));
 
-  return ins_LDR_STR;
+  data->FaultMapAddEntry(obj, ins_LDR_STR, NULL);
 }
 
 void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins, t_arm_condition_code cond, t_relocatable* target, t_regset& rest, bool isThumb, t_object* obj)
@@ -1589,6 +1643,8 @@ void Obfus_m_segv_7::insert_ctx_code(t_bbl* from_bbl, s_bbl* rbbl, s_ins* rsins,
       T_RELOCATABLE(ins_LDR_STR), // sec  //R01 confirmed
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded_A, 0 , reloc);     // immediate : 0
+
+  data->FaultMapAddEntry(obj, ins_LDR_STR, NULL);
 }
 
 t_arm_condition_code Obfus_m_segv_7::random_cond()
@@ -1633,7 +1689,7 @@ t_arm_condition_code Obfus_m_segv_7::random_cond()
   }
 }
 
-t_arm_ins* Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = true;
 
@@ -1694,8 +1750,6 @@ t_arm_ins* Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available,
   insert_ctx_code(bbl_A, rbbl, rsins, ARM_CONDITION_AL, target, rest, isThumb, obj);
   insert_ctx_code(bbl, rbbl, rsins, rcond, target, rest, isThumb, obj);
   VERBOSE(1,("\n"));
-
-  return rsins->ins;
 }
 
 void Obfus_m_segv_8::find_rbbl(s_bbl*& rbbl, s_ins*& rsins, t_regset& rest, t_bbl* bbl, bool isThumb, t_regset& available, vector<s_bbl*>& vfil)
@@ -1779,7 +1833,7 @@ t_arm_condition_code Obfus_m_segv_8::determine_condition_based_on_flag(t_bbl* bb
   return ARM_CONDITION_AL; // all flags are dead
 }
 
-t_arm_ins* Obfus_m_segv_8::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_8::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   //enforceDummyInstructions = true;
   delete_INS_BBL_FromMapping = false; //for small applications it may not find enough distinct instructions to branch to.
@@ -1831,11 +1885,9 @@ t_arm_ins* Obfus_m_segv_8::encode_signalling(t_object* obj, t_regset& available,
   insert_ctx_code(bbl, rbblB, rsinsB, rcond, target, restB, isThumb, obj);
   //add branch
   insert_ctx_code(bbl_A, rbblA, rsinsA, ARM_CONDITION_AL, target, restA, isThumb, obj);
-
-  return NULL;
 }
 
-t_arm_ins* Obfus_m_segv_9::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_9::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
@@ -1899,10 +1951,10 @@ t_arm_ins* Obfus_m_segv_9::encode_signalling(t_object* obj, t_regset& available,
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
 
-  return arm_ins;
+  data->FaultMapAddEntry(obj, arm_ins, reloc);
 }
 
-t_arm_ins* Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
+void Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
 {
   delete_INS_BBL_FromMapping = false; //for small applications it may not find enough distinct instructions to branch to.
 
@@ -1973,5 +2025,5 @@ t_arm_ins* Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available
       sstream.str().c_str());
   ArmInsMakeAddressProducer(ill_ins_encoded, 0 /* immediate */, reloc);
 
-  return ins_BRANCH;
+  data->FaultMapAddEntry(obj, ins_BRANCH, reloc);
 }

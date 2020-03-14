@@ -34,9 +34,11 @@ SelfDebuggingTransformer::SelfDebuggingTransformer (t_object* obj, t_const_strin
   stm_sym = SymbolTableGetSymbolByName(OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX"Stm");
   nr_of_targets_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "nr_of_targets");
   target_map_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "target_map");
+  nr_of_faults_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "nr_of_faults");
+  fault_map_sym = SymbolTableGetSymbolByName (OBJECT_SUB_SYMBOL_TABLE(obj), SD_IDENTIFIER_PREFIX "fault_map");
 
   /* Check if all symbols were found */
-  ASSERT(init_sym && ldr_sym && str_sym && ldm_sym && stm_sym && target_map_sym && nr_of_targets_sym, ("Didn't find all symbols present in the debugger object! Are you sure this object was linked in?"));
+  ASSERT(init_sym && ldr_sym && str_sym && ldm_sym && stm_sym && target_map_sym && nr_of_targets_sym && fault_map_sym && nr_of_faults_sym, ("Didn't find all symbols present in the debugger object! Are you sure this object was linked in?"));
 
   /* The size of a map entry has been set as the first element of the map */
   target_map_entry_size = SectionGetData32 (T_SECTION(SYMBOL_BASE(target_map_sym)), SYMBOL_OFFSET_FROM_START(target_map_sym));
@@ -245,7 +247,7 @@ void SelfDebuggingTransformer::TransformIncomingEdgeImpl (t_bbl* bbl, t_cfg_edge
   }
 
   /* Encode the signalling of the mini-debugger */
-  signaling_ins.push_back(obfus->encode_signalling(obj, available, bbl, T_RELOCATABLE(CFG_EDGE_TAIL(edge))));
+  obfus->encode_signalling(obj, available, bbl, T_RELOCATABLE(CFG_EDGE_TAIL(edge)));
 
   /* Adjust the incoming edge to go to hell */
   CfgEdgeChangeTail(edge, CFG_HELL_NODE(cfg));
@@ -346,7 +348,7 @@ void SelfDebuggingTransformer::TransformOutgoingEdgeImpl (t_bbl* bbl, t_cfg_edge
   obfus->encode_constant(obj, bbl, available, adr_size, constant);
 
   /* Encode the signalling of the mini-debugger */
-  signaling_ins.push_back(obfus->encode_signalling(obj, available, bbl, to));
+  obfus->encode_signalling(obj, available, bbl, to);
 }
 
 void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
@@ -1107,7 +1109,7 @@ void SelfDebuggingTransformer::TransformObject()
   /* Get the CFG and do some preparatory work on it */
   cfg = OBJECT_CFG(obj);
 
-  obfusData.reset(new ObfusData(cfg));
+  obfusData.reset(new ObfusData(cfg, fault_map_sym));
   PrepareCfg(cfg);
 
   Region* region;
@@ -1150,6 +1152,14 @@ void SelfDebuggingTransformer::TransformObject()
     SectionSetData32 (target_map_sec, AddressNewForObject(obj, offset), constants[iii]);
   }
 
+  /* Set all the variables in the linked in object */
+  t_uint32 nr_of_faults = obfusData->faulting_instructions.size();
+  SectionSetData32 (T_SECTION(SYMBOL_BASE(nr_of_faults_sym)), SYMBOL_OFFSET_FROM_START(nr_of_faults_sym), nr_of_faults);
+
+  /* Resize the mapping table now that we know its size */
+  SECTION_SET_DATA(obfusData->fault_map_sec, Realloc (SECTION_DATA(obfusData->fault_map_sec), nr_of_faults * obfusData->fault_map_entry_size));
+  SECTION_SET_CSIZE(obfusData->fault_map_sec, nr_of_faults * obfusData->fault_map_entry_size);
+
   STATUS(STOP, ("Anti Debugging"));
 }
 
@@ -1185,7 +1195,7 @@ void SelfDebuggingTransformer::FinalizeTransform ()
   }
 
   fprintf(f_metric, "Signal sources:\n");
-  for (auto ins : signaling_instructions)
+  for (auto ins : obfusData->faulting_instructions)
   {
     fprintf(f_metric, "r%u %x\n", ARM_INS_REGB(ins), ARM_INS_CADDRESS(ins));
   }
