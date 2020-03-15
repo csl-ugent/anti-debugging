@@ -40,7 +40,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
     t_function* function_str;
     static const bool dump_metrics = false;
 
-    /* Variables for the Key-Value map used by the debugger to find which code to execute */
+    /* Variables for the maps used by the mini-debugger */
     t_symbol* target_map_sym;
     t_section* target_map_sec;
     t_uint32 target_map_entry_size;/* The size of one entry */
@@ -49,7 +49,7 @@ class SelfDebuggingTransformer : public AbstractTransformer
     /* The constants used by the map as key */
     std::vector<t_uint32> constants;
     std::vector<t_bool> targets_migrated;
-    std::vector<t_arm_ins*> signaling_ins;
+    std::vector<t_arm_ins*> signaling_instructions;
 
     /* The obfuscator instance */
     std::unique_ptr<ObfusData> obfusData;

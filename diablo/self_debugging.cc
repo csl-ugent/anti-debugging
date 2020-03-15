@@ -1061,7 +1061,6 @@ void SelfDebuggingTransformer::PrepareCfg (t_cfg* cfg)
   MarkFrom(cfg, T_BBL(SYMBOL_BASE(stm_sym)));
 }
 
-
 t_uint32 SelfDebuggingTransformer::TargetMapAddEntry(t_relocatable* target, t_bool is_migrated_target)
 {
   /* Determine a constant. In this implementation we just increment... */
@@ -1077,7 +1076,19 @@ t_uint32 SelfDebuggingTransformer::TargetMapAddEntry(t_relocatable* target, t_bo
   /* Set the value in the map: we're using the offset of the target to a known position in the binary. As known position we're using the map itself. The
    * map will contain relative distance from target_map_sec to the address of the target.
    */
-  ObfusData::generate_addr_mapping(obj, target, offset, target_map_sec);
+  t_reloc* reloc = RelocTableAddRelocToRelocatable(OBJECT_RELOC_TABLE(obj),
+      AddressNullForObject(obj), // addend
+      T_RELOCATABLE(target_map_sec), // from  R01
+      AddressNewForObject(obj, offset), // from-offset
+      target, // to  R00
+      AddressNullForObject(obj), // to-offset
+      FALSE, // hell
+      NULL, // edge
+      NULL, // corresp
+      T_RELOCATABLE(target_map_sec), // sec R01
+      "R00R01-" "\\" WRITE_32);
+
+  ObfusData::obfuscate_mapping(obj, reloc);
 
   /* Return constant, so it can optionally be encoded */
   return constant;
@@ -1174,7 +1185,7 @@ void SelfDebuggingTransformer::FinalizeTransform ()
   }
 
   fprintf(f_metric, "Signal sources:\n");
-  for (auto ins : signaling_ins)
+  for (auto ins : signaling_instructions)
   {
     fprintf(f_metric, "r%u %x\n", ARM_INS_REGB(ins), ARM_INS_CADDRESS(ins));
   }

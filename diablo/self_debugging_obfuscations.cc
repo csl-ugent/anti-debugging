@@ -94,46 +94,26 @@ void Obfus::encode_constant(t_object* obj, t_bbl* bbl, t_regset& available, t_ui
     ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, (1 << const_reg), ARM_CONDITION_AL, isThumb);
 }
 
-void ObfusData::generate_addr_mapping(t_object* obj, t_relocatable* target, t_uint32 offset, t_section* map_sec)
+void ObfusData::obfuscate_mapping(t_object* obj, t_reloc* reloc)
 {
   if (IS_MUTILATED_ADDR_MAPPING) {
+    t_string old_code = RELOC_CODE(reloc);
+    *(strstr(old_code, "R01-") + strlen("R01")) = '\0';/* Cut off string at '-' */
+
     //this relocatable will store the migrated code fragements address into addr_mapping
     //but it will first mutilate it (storing only the lowest 2 bytes and then XOR with some value (e.g. 0x5050))
-
-    stringstream sstream, sstreamops;
-    sstream << "R01";
-    sstreamops << "^";
-    sstream << "i" << std::hex << std::setw(8) << std::setfill('0') << MUTILATION_MASK_ADR_MAP;
-    sstreamops << "^";
-    sstream << "R00";
-    sstream << sstreamops.str() << "\\" << WRITE_32;
-    VERBOSE(1,("generate_addr_mapping:  %s", sstream.str().c_str()));
-
-    RelocTableAddRelocToRelocatable(OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), // addend
-        T_RELOCATABLE(map_sec), // from  R01
-        AddressNewForObject(obj, offset), // from-offset
-        target, // to  R00
-        AddressNullForObject(obj), // to-offset
-        FALSE, // hell
-        NULL, // edge
-        NULL, // corresp
-        T_RELOCATABLE(map_sec), // sec R01
-        sstream.str().c_str()); //mutilated values inside the addr_mapping
     // we shall store offset(migrated_frag, addr_mapping) XOR MUTILATION_MASK_ADR_MAP --> this way only a part of solution is stored in mapping.
+    stringstream sstream;
+    sstream << old_code;
+    sstream << "i" << std::hex << std::setw(8) << std::setfill('0') << MUTILATION_MASK_ADR_MAP;
+    sstream << "^";
+    sstream << "^";
+    sstream << "\\" << WRITE_32;
+    VERBOSE(1,("obfuscate_mapping: %s", sstream.str().c_str()));
+
+    Free(old_code);
+    RELOC_SET_CODE(reloc, StringDup(sstream.str().c_str()));
   }
-  else
-    RelocTableAddRelocToRelocatable(OBJECT_RELOC_TABLE(obj),
-        AddressNullForObject(obj), /* addend */
-        T_RELOCATABLE(map_sec), /* from */
-        AddressNewForObject(obj, offset), /* from-offset */
-        target, /* to */
-        AddressNullForObject(obj), /* to-offset */
-        FALSE, /* hell */
-        NULL, /* edge */
-        NULL, /* corresp */
-        T_RELOCATABLE(map_sec), /* sec */
-        "R00R01-" "\\" WRITE_32);
 }
 
 ObfusData::ObfusData(t_cfg* cfg)

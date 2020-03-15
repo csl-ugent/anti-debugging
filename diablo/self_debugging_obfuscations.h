@@ -53,7 +53,7 @@ class ObfusData {
     std::vector<s_bbl*> ins_map_x;
     t_cfg* cfg;
 
-    static void generate_addr_mapping(t_object* obj, t_relocatable* target, t_uint32 offset, t_section* map_sec);
+    static void obfuscate_mapping(t_object* obj, t_reloc* reloc);
     static bool is_legal_branch(t_bbl* bbl, t_arm_ins* arm_ins);
     static bool is_legal_loadstore(t_bbl* bbl, t_arm_ins* arm_ins);
 
