@@ -423,7 +423,8 @@ void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* Backup all live registers */
   t_uint32 regs = RegsetToUint32(int_to_push);
-  ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
+  if (regs)
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
   /* The first argument is a pointer to the base address. We put the register on the stack so we can take its address. Take care of alignment. */
   if (aligned)
@@ -478,11 +479,14 @@ void SelfDebuggingTransformer::TransformLdr (t_bbl* bbl, t_arm_ins* orig_ins)
   }
 
   /* Restore all live registers, get a temporary base register we now will be overwritten (and is thus dead) */
-  t_reg tmp_reg;
-  REGSET_FOREACH_REG(int_to_push, tmp_reg)
-    break;
-  ArmMakeInsForBbl(Ldm, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, regs, ARM_CONDITION_AL, FALSE, FALSE, TRUE);
-  ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, ARM_REG_R13, ARM_REG_NONE, aligned ? adr_size * 2: adr_size, ARM_CONDITION_AL);
+  if (regs)
+  {
+    t_reg tmp_reg;
+    REGSET_FOREACH_REG(int_to_push, tmp_reg)
+      break;
+    ArmMakeInsForBbl(Ldm, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, regs, ARM_CONDITION_AL, FALSE, FALSE, TRUE);
+    ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, ARM_REG_R13, ARM_REG_NONE, aligned ? adr_size * 2: adr_size, ARM_CONDITION_AL);
+  }
 
   /* Move the result into the target register */
   if (target == ARM_REG_R13)
@@ -590,7 +594,8 @@ void SelfDebuggingTransformer::TransformStr(t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* Backup all live registers */
   t_uint32 regs = RegsetToUint32(int_to_push);
-  ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
+  if (regs)
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
   /* The first argument is a pointer to the base address. We put the register on the stack so we can take its address. Take care of alignment. */
   if (aligned)
@@ -672,11 +677,14 @@ void SelfDebuggingTransformer::TransformStr(t_bbl* bbl, t_arm_ins* orig_ins)
   }
 
   /* Restore all live registers, get a temporary base register we now will be overwritten (and is thus dead) */
-  t_reg tmp_reg;
-  REGSET_FOREACH_REG(int_to_push, tmp_reg)
-    break;
-  ArmMakeInsForBbl(Ldm, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, regs, ARM_CONDITION_AL, FALSE, FALSE, TRUE);
-  ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, ARM_REG_R13, ARM_REG_NONE, aligned ? adr_size * 2: adr_size, ARM_CONDITION_AL);
+  if (regs)
+  {
+    t_reg tmp_reg;
+    REGSET_FOREACH_REG(int_to_push, tmp_reg)
+      break;
+    ArmMakeInsForBbl(Ldm, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, regs, ARM_CONDITION_AL, FALSE, FALSE, TRUE);
+    ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, tmp_reg, ARM_REG_R13, ARM_REG_NONE, aligned ? adr_size * 2: adr_size, ARM_CONDITION_AL);
+  }
 
   /* Pop the - potentially - changed base register back, if its R13 we deal with this later, as it is live */
   if (base != ARM_REG_R13)
@@ -761,7 +769,8 @@ void SelfDebuggingTransformer::TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* Backup all live registers */
   t_uint32 regs = RegsetToUint32(int_to_push);
-  ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
+  if (regs)
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
   /* Calculate how many space we need to reserve on the stack and reserve it */
   t_uint32 space_to_reserve = adr_size * (aligned ? nr_of_regs_to_load : nr_of_regs_to_load + 1);
@@ -789,7 +798,8 @@ void SelfDebuggingTransformer::TransformLdm(t_bbl* bbl, t_arm_ins* orig_ins)
     ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, addr, addr, ARM_REG_NONE, adr_size * nr_of_regs_to_load, ARM_CONDITION_AL);
 
   /* Restore all live registers */
-  ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, regs, ARM_CONDITION_AL, isThumb);
+  if (regs)
+    ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
   if (!aligned)
     ArmMakeInsForBbl(Add, Prepend, arm_ins, bbl_split, isThumb, ARM_REG_R13, ARM_REG_R13, ARM_REG_NONE, adr_size, ARM_CONDITION_AL);/* Reclaim the stack space */
@@ -887,7 +897,8 @@ void SelfDebuggingTransformer::TransformStm(t_bbl* bbl, t_arm_ins* orig_ins)
 
   /* Backup all live registers */
   t_uint32 regs = RegsetToUint32(int_to_push);
-  ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
+  if (regs)
+    ArmMakeInsForBbl(Push, Append, arm_ins, bbl, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
   /* Push the regs that are to be stored onto the stack and allocate an extra stack slot if required for alignment */
   t_uint32 space_to_reserve = adr_size * (aligned ? nr_of_regs_to_store : nr_of_regs_to_store + 1);
@@ -913,6 +924,7 @@ void SelfDebuggingTransformer::TransformStm(t_bbl* bbl, t_arm_ins* orig_ins)
   ArmMakeInsForBbl(CondBranchAndLink, Append, arm_ins, bbl, isThumb, ARM_CONDITION_AL);
 
   /* Restore all live registers */
+  if (regs)
   ArmMakeInsForBbl(Pop, Prepend, arm_ins, bbl_split, isThumb, regs, ARM_CONDITION_AL, isThumb);
 
   /* Clean up the stack */

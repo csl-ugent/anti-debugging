@@ -325,26 +325,27 @@ void ObfusData::delete_from_ins_map(vector<s_bbl*>& ins_map, s_bbl* sbbl, s_ins*
   }
 }
 
-void ObfusData::intersect_available_and_mapped(t_regset& available, vector<s_bbl*>& ins_map, vector<s_bbl*>& vfil)
+vector<s_bbl*> ObfusData::intersect_available_and_mapped(t_regset& available, vector<s_bbl*>& ins_map)
 {
-  // We look and fill the array with BBLs which have an instruction that can be used to result in SIGSEGV.
-  vfil.clear();
-  t_reg tmpr;
   printLBBL(available, "available regs: ");
 
-  s_bbl* obs;
-  for (unsigned int i = 0; i < ins_map.size(); i++) { //for every BBL ...
-    obs = ins_map[i];
-    for (unsigned int j = 0; j < obs->vsins->size(); j++) { //for every LDR/STR in the entire code...
-      REGSET_FOREACH_REG(available, tmpr) {
-        if (obs->vsins->at(j)->B == tmpr)// can we find an available register from current program state?
-          vfil.push_back(obs); // yes, found!
+  vector<s_bbl*> vfil;
+  for (s_bbl* sb : ins_map) { //for every BBL ...
+    bool ok = true;
+    for (s_ins* si : *sb->vsins) { //for every instruction
+      if (!RegsetIn(available, si->B))
+      {
+        ok = false;
+        break;
       }
     }
+    // TODO: we should return a list of all potential fault instructions, instead of BBLs...
+    if (ok)
+      vfil.push_back(sb); // All possible instructions in this BBL are OK
   }
   VERBOSE(1, ("\t vfil count: %i", vfil.size()));
-  //for (unsigned int i = 0; i < vfil.size(); i++)
-  //VERBOSE(0, ("\t\t possible branch to ins: @G, bbl: @G  using regB: %i, regC: %i",ARM_INS_CADDRESS(vfil[i]->sins->ins), BBL_CADDRESS(vfil[i]->bbl), vfil[i]->sins->B, vfil[i]->sins->C));
+
+  return vfil;
 }
 
 void Obfus_m_bkpt_1::encode_signalling(t_object* obj, t_regset& available, t_bbl* bbl, t_relocatable* target)
@@ -516,12 +517,6 @@ void Obfus_m_segv_1::obfus_add_illegal_address(t_bbl* bbl, bool isThumb, t_reg r
   ArmMakeInsForBbl(Pop, Append, arm_ins, bbl, isThumb, 1<<regextra, ARM_CONDITION_AL, isThumb);
   VERBOSE(0, ("\t ill addr: %08X", A+B+C+D));
   */
-}
-
-t_regset Obfus_m_segv_1::obfus_get_used_registers_current_state(t_bbl* bbl)
-{
-  t_regset LBBL = BBL_REGS_LIVE_OUT(bbl);
-  return LBBL;
 }
 
 void Obfus_m_segv_1::obfus_fill_stack_from_bbl(s_bbl* rbbl, s_ins* rsins, std::stack< std::pair<t_arm_ins*, s_bbl*> >& st)
@@ -713,7 +708,7 @@ std::pair<int, s_bbl*> Obfus_m_segv_1::obfus_prepare_rbbl(s_bbl* rbbl, s_ins* rs
   } else { // we have to split rbbl->bbl so that we have a block with a LDR/STR instruction.
     VERBOSE(1, ("\t processing non-first ins in BBL."));
   }
-  t_regset LBBL = obfus_get_used_registers_current_state(bbl);
+  t_regset LBBL = BBL_REGS_LIVE_OUT(bbl);
   t_reg tmpr;
   printLBBL(LBBL, "LBBLs: ");
 
@@ -773,8 +768,7 @@ void Obfus_m_segv_1::encode_signalling(t_object* obj, t_regset& available, t_bbl
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   pair<s_bbl*, s_ins*> rpair;
@@ -821,8 +815,7 @@ void Obfus_m_segv_2::encode_signalling(t_object* obj, t_regset& available, t_bbl
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   t_arm_ins* arm_ins;
@@ -1007,8 +1000,7 @@ void Obfus_m_segv_4::encode_signalling(t_object* obj, t_regset& available, t_bbl
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   vector<pair<t_reg, t_uint32>> vregConst;
@@ -1177,8 +1169,7 @@ void Obfus_m_segv_4_revised::postProcess()
 
     ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
 
-    vector<s_bbl*> vfil;
-    data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+    vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
     ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
     vector<pair<t_reg, t_uint32>> vregConst;
@@ -1262,7 +1253,7 @@ void Obfus_m_segv_4_revised::encode_signalling(t_object* obj, t_regset& availabl
 void Obfus_m_segv_5::available_with_other_bbl(s_bbl* rbbl, s_ins* rsins, t_regset& available, t_regset& ret)
 {
   t_reg tmpr;
-  t_regset OLBBL = obfus_get_used_registers_current_state(rbbl->bbl); //live out registers in BBL of STR/LDR
+  t_regset OLBBL = BBL_REGS_LIVE_OUT(rbbl->bbl); //live out registers in BBL of STR/LDR
   RegsetSetInvers(OLBBL);
 
   RegsetSetDup(ret, available); //copy available to ret
@@ -1320,8 +1311,7 @@ void Obfus_m_segv_5::encode_signalling(t_object* obj, t_regset& available, t_bbl
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT(!RegsetIsEmpty(available), ("Can not use this signalling encoding: At least 1 available register(s) required!"));
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   vector<t_arm_ins*> vfilINS;
@@ -1482,8 +1472,7 @@ void Obfus_m_segv_6::encode_signalling(t_object* obj, t_regset& available, t_bbl
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT((RegsetCountRegs(available) >= 2), ("Can not use this signalling encoding: At least 2 available register(s) required!"));
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   t_arm_ins* arm_ins;
@@ -1696,8 +1685,7 @@ void Obfus_m_segv_7::encode_signalling(t_object* obj, t_regset& available, t_bbl
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT((RegsetCountRegs(available) >= 2), ("Can not use this signalling encoding: At least 2 available register(s) required!"));
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   t_arm_ins* arm_ins;
@@ -1841,8 +1829,7 @@ void Obfus_m_segv_8::encode_signalling(t_object* obj, t_regset& available, t_bbl
   ASSERT(!data->ins_map_rw.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
   ASSERT((RegsetCountRegs(available) >= 2), ("Can not use this signalling encoding: At least 2 available register(s) required!"));
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_rw, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_rw);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   t_arm_ins* arm_ins;
@@ -1962,8 +1949,7 @@ void Obfus_m_segv_10::encode_signalling(t_object* obj, t_regset& available, t_bb
 
   RegsetSetAddReg(available, ARM_REG_R14);// We may use the LR register because we PUSH it onto stack!!! (**)
 
-  vector<s_bbl*> vfil;
-  data->intersect_available_and_mapped(available, data->ins_map_x, vfil);
+  vector<s_bbl*> vfil = data->intersect_available_and_mapped(available, data->ins_map_x);
   ASSERT(!vfil.empty(), ("The chosen OBFUS_METHOD has failed due to some reason. Try building it again?"));
 
   t_arm_ins* arm_ins;

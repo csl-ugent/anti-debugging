@@ -61,7 +61,7 @@ class ObfusData {
     static bool is_legal_loadstore(t_bbl* bbl, t_arm_ins* arm_ins);
 
     void delete_from_ins_map(std::vector<s_bbl*>& ins_map, s_bbl* sbbl, s_ins* sins);
-    void intersect_available_and_mapped(t_regset& available, std::vector<s_bbl*>& ins_map, std::vector<s_bbl*>& vfil);
+    std::vector<s_bbl*> intersect_available_and_mapped(t_regset& available, std::vector<s_bbl*>& ins_map);
     void generate_instruction_maps();
     void FaultMapAddEntry(t_object* obj, t_arm_ins* fault_ins, const t_reloc* reloc);
     ObfusData(t_cfg* cfg, t_symbol* fault_map_sym);
@@ -130,7 +130,6 @@ class Obfus_m_segv_1 			: public Obfus_segv_abstract {
     bool delete_INS_BBL_FromMapping = true; // if true: disallow usage of same LDR/STR instruction for different context switches.
     t_uint32 obfus_generate_random_ill_addr(t_uint32 immed, bool neg_immed);
     void obfus_add_illegal_address(t_bbl* bbl, bool isThumb, t_reg regB, t_uint32 immed, bool neg_immed);
-    t_regset obfus_get_used_registers_current_state(t_bbl* bbl);
     virtual void obfus_fill_stack_from_bbl(s_bbl* rbbl, s_ins* rsins, std::stack< std::pair<t_arm_ins*, s_bbl*> >& st);
     virtual bool obfus_process_stack_get_pairSplit_regB_check(std::pair<t_arm_ins*, s_bbl*>& pairSplit, s_ins* rsins);
     virtual std::pair<t_arm_ins*, s_bbl*> obfus_process_stack_get_pairSplit(t_bbl* bbl, s_ins* rsins, t_regset& LBBL, std::stack< std::pair<t_arm_ins*, s_bbl*> >& st, std::vector<t_arm_ins*>& vfilINS);
