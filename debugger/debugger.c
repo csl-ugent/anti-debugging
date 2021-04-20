@@ -968,7 +968,14 @@ void DIABLO_Debugger_Init()
 
   /* Allow everyone to ptrace. After the fork we'll change it to the specific PID of the child. This could be improved
    * by using some active looping in the child's attaching logic, perhaps? */
-  prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY);
+  if (prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY) == -1) {
+    /* PR_SET_PTRACER is not supported everywhere. This is OK */
+    if (errno != EINVAL)
+    {
+      perror("pr_set_tracer common");
+      exit(1);
+    }
+  }
 
   /* Get the parent PID before forking */
   pid_t parent_pid = getpid();
@@ -999,14 +1006,24 @@ void DIABLO_Debugger_Init()
         init_logging(parent_pid);
 
         /* Only allow parent to ptrace */
-        prctl(PR_SET_PTRACER, parent_pid);
+        if (prctl(PR_SET_PTRACER, parent_pid) == -1) {
+          /* PR_SET_PTRACER is not supported everywhere. This is OK */
+          if (errno != EINVAL)
+          {
+            ERRNO_LOG("pr_set_tracer child");
+            exit(1);
+          }
+        }
 
         /* Move process to a separate process group. This avoids signals sent from the terminal and
          * meant for the parent ending up at the child. A CTRL-Z on the commandline would stop our
          * child, which should actually be handling the SIGSTOP arriving for its tracee, instead of
          * stopping.
          */
-        setpgid(0, 0);
+        if (setpgid(0, 0) == -1) {
+          ERRNO_LOG("setpgid");
+          exit(1);
+        }
 
         /* Install signal handler for SIGTERM. If the self-debugger receives a SIGTERM, we actually
          * want the protected applicaton to get it, and perform a graceful shutdown.
@@ -1049,7 +1066,14 @@ void DIABLO_Debugger_Init()
   init_logging(child_pid);
 
   /* Only allow child to ptrace */
-  prctl(PR_SET_PTRACER, child_pid);
+  if (prctl(PR_SET_PTRACER, child_pid) == -1) {
+    /* PR_SET_PTRACER is not supported everywhere. This is OK */
+    if (errno != EINVAL)
+    {
+      ERRNO_LOG("pr_set_tracer parent");
+      exit(1);
+    }
+  }
 
   /* Install the finalization routine to executed when the parent exits */
   atexit(fini_routine);
