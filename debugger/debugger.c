@@ -92,8 +92,9 @@ static void fini_debugger()
 /* Clean up and exit the debugger */
 static __attribute__((noreturn)) void close_debugger(int exit_code)
 {
-  /* Clean up */
-  fini_debugger();
+  /* Clean up, if we're the selfdebugger */
+  if (!selfdebugger_pid)
+    fini_debugger();
 
   /* Exit this process */
   exit(exit_code);
@@ -1081,12 +1082,12 @@ void DIABLO_Debugger_Init()
 
   /* Install the finalization routine to executed when the parent exits */
   atexit(fini_routine);
+  selfdebugger_pid = child_pid;
 
   /* In the parent, we'll spin on this variable until the child signals we can continue */
   while (!can_run);
 
   /* Have the parent attach to the self-debugger */
-  selfdebugger_pid = child_pid;
   ptrace(PTRACE_SEIZE, selfdebugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
   init_debugger(selfdebugger_pid);
 
