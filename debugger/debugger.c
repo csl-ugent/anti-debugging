@@ -131,7 +131,10 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
     ERRNO_LOG("write_tracee_mem - interrupt");
     close_debugger(1);
   }
-  waitpid(debuggee_pid, NULL, __WALL);
+  if (waitpid(debuggee_pid, NULL, __WALL) == -1) {
+    ERRNO_LOG("write_tracee_mem - waitpid");
+    close_debugger(1);
+  }
 
   /* Write to the process word per word, except for non-word-aligned parts at the end */
   size_t bytes_read = 0;
@@ -1048,12 +1051,24 @@ void DIABLO_Debugger_Init()
         init_debugger(parent_pid);
 
         /* Stop the parent */
-        ptrace(PTRACE_INTERRUPT, parent_pid, 0, 0);
-        waitpid(parent_pid, NULL, __WALL);
+        if (ptrace(PTRACE_INTERRUPT, parent_pid, 0, 0) == -1) {
+          ERRNO_LOG("stop parent - interrupt");
+          close_debugger(1);
+        }
+        if (waitpid(parent_pid, NULL, __WALL) == -1) {
+          ERRNO_LOG("stop parent - waitpid");
+          close_debugger(1);
+        }
 
         /* Allow the parent to continue */
-        ptrace(PTRACE_POKEDATA, parent_pid, (void*)&can_run, (void*)1);
-        ptrace(PTRACE_CONT, parent_pid, 0, 0);
+        if (ptrace(PTRACE_POKEDATA, parent_pid, (void*)&can_run, (void*)1) == -1) {
+          ERRNO_LOG("continue parent - poke");
+          close_debugger(1);
+        }
+        if (ptrace(PTRACE_CONT, parent_pid, 0, 0) == -1) {
+          ERRNO_LOG("continue parent - continue");
+          close_debugger(1);
+        }
 
         /* Right before we go into the debug loop, set the context to return to */
         ANDROID_LOG("Start main loop");
@@ -1088,7 +1103,10 @@ void DIABLO_Debugger_Init()
   while (!can_run);
 
   /* Have the parent attach to the self-debugger */
-  ptrace(PTRACE_SEIZE, selfdebugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
+  if (ptrace(PTRACE_SEIZE, selfdebugger_pid, NULL, (void*)  PTRACE_O_EXITKILL) == -1) {
+    ERRNO_LOG("seize parent");
+    close_debugger(1);
+  }
 
   /* Initialize mini-debugger */
   init_debugger(selfdebugger_pid);
