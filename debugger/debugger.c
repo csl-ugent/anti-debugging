@@ -200,7 +200,7 @@ static void init_logging(pid_t target_pid)
 }
 
 /* Perform initialization for the debugger functionality */
-static bool init_debugger(pid_t target_pid)
+static void init_debugger(pid_t target_pid)
 {
   pid_t self_pid = getpid();
   debuggee_pid = target_pid;
@@ -215,8 +215,8 @@ static bool init_debugger(pid_t target_pid)
 
   if(mem_file == -1)
   {
-    LOG("Debuggee mem not found.");
-    return false;
+    ERRNO_LOG("init_debugger - open debuggee mem");
+    close_debugger(1);
   }
 
   /* Now get our own PID and open our own mem_file */
@@ -225,11 +225,9 @@ static bool init_debugger(pid_t target_pid)
 
   if(mem_file_own == -1)
   {
-    LOG("Own mem not found.");
-    return false;
+    ERRNO_LOG("init_debugger - open own mem");
+    close_debugger(1);
   }
-
-  return true;
 }
 
 /* Some global information about the threads we are attached to. Keep an array of TID's we attached
@@ -1046,22 +1044,21 @@ void DIABLO_Debugger_Init()
         ANDROID_LOG("Mini-debugger has been forked and will start attaching!");
         attachToThreadGroup(parent_pid);
 
-        /* Initialize the debugger and start the debugging loop */
-        if (init_debugger(parent_pid))
-        {
-          /* Stop the parent */
-          ptrace(PTRACE_INTERRUPT, parent_pid, 0, 0);
-          waitpid(parent_pid, NULL, __WALL);
+        /* Initialize the debugger */
+        init_debugger(parent_pid);
 
-          /* Allow the parent to continue */
-          ptrace(PTRACE_POKEDATA, parent_pid, (void*)&can_run, (void*)1);
-          ptrace(PTRACE_CONT, parent_pid, 0, 0);
+        /* Stop the parent */
+        ptrace(PTRACE_INTERRUPT, parent_pid, 0, 0);
+        waitpid(parent_pid, NULL, __WALL);
 
-          /* Right before we go into the debug loop, set the context to return to */
-          ANDROID_LOG("Start main loop");
-          getcontext(&debug_loop_context);
-          debug_main();
-        }
+        /* Allow the parent to continue */
+        ptrace(PTRACE_POKEDATA, parent_pid, (void*)&can_run, (void*)1);
+        ptrace(PTRACE_CONT, parent_pid, 0, 0);
+
+        /* Right before we go into the debug loop, set the context to return to */
+        ANDROID_LOG("Start main loop");
+        getcontext(&debug_loop_context);
+        debug_main();
 
         close_debugger(0);
       }
@@ -1089,6 +1086,8 @@ void DIABLO_Debugger_Init()
 
   /* Have the parent attach to the self-debugger */
   ptrace(PTRACE_SEIZE, selfdebugger_pid, NULL, (void*)  PTRACE_O_EXITKILL);
+
+  /* Initialize mini-debugger */
   init_debugger(selfdebugger_pid);
 
   /* Create the context for the debug loop */
