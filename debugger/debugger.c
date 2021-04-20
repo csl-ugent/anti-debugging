@@ -71,6 +71,30 @@ static int mem_file;
 static int mem_file_own;
 static FILE* flog;
 
+/* Perform finalization of debugger functionality */
+static void fini_debugger()
+{
+  LOG("Finalizing debugger functionality.\n");
+
+  /* Close the open file descriptors */
+  close(mem_file);
+  close(mem_file_own);
+
+#ifdef ENABLE_LOGGING
+  fclose(flog);
+#endif
+}
+
+/* Clean up and exit the debugger */
+static __attribute__((noreturn)) void close_debugger(int exit_code)
+{
+  /* Clean up */
+  fini_debugger();
+
+  /* Exit this process */
+  exit(exit_code);
+}
+
 /* For reading we can always use /proc/PID/mem */
 /* TODO: this should be a static function, but we had to hack this away to avoid Diablo issues... */
 void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
@@ -201,30 +225,6 @@ static bool init_debugger(pid_t target_pid)
   }
 
   return true;
-}
-
-/* Perform finalization of debugger functionality */
-static void fini_debugger()
-{
-  LOG("Finalizing debugger functionality.\n");
-
-  /* Close the open file descriptors */
-  close(mem_file);
-  close(mem_file_own);
-
-#ifdef ENABLE_LOGGING
-  fclose(flog);
-#endif
-}
-
-/* Clean up and exit the debugger */
-static __attribute__((noreturn)) void close_debugger(int exit_code)
-{
-  /* Clean up */
-  fini_debugger();
-
-  /* Exit this process */
-  exit(exit_code);
 }
 
 /* Some global information about the threads we are attached to. Keep an array of TID's we attached
