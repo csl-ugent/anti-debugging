@@ -19,8 +19,10 @@
 #define ANDROID_LOG(...)
 #endif
 
-#define LOG(mesg, ...) printf(mesg, ##__VA_ARGS__)
+#define ERRNO_LOG(mesg) fprintf(flog, mesg " ||| errno %d: %s\n", errno, strerror(errno))
+#define LOG(mesg, ...) fprintf(flog, mesg, ##__VA_ARGS__)
 #else
+#define ERRNO_LOG(...)
 #define LOG(...)
 #define ANDROID_LOG(...)
 #endif
@@ -67,6 +69,7 @@ static ucontext_t debug_loop_context;
 /* These static variables are used when reading memory from the debuggee */
 static int mem_file;
 static int mem_file_own;
+static FILE* flog;
 
 /* For reading we can always use /proc/PID/mem */
 /* TODO: this should be a static function, but we had to hack this away to avoid Diablo issues... */
@@ -74,7 +77,7 @@ void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
 {
   lseek(mem_file, addr, SEEK_SET);
   if (read(mem_file, buf, size) == -1) {
-    perror(0);
+    ERRNO_LOG("read_tracee_mem");
     exit(1);
   }
 }
@@ -85,7 +88,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
 {
   lseek(mem_file, addr, SEEK_SET);
   if (write(mem_file, buf, size) == -1) {
-    perror(0);
+    ERRNO_LOG("write_tracee_mem");
     exit(1);
   }
 }
@@ -96,7 +99,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
   /* Stop the debuggee, so we can use PTRACE requests to write to its address space */
   if (ptrace(PTRACE_INTERRUPT, debuggee_pid, 0, 0) == -1)
   {
-    perror(0);
+    ERRNO_LOG("write_tracee_mem - interrupt");
     exit(1);
   }
   waitpid(debuggee_pid, NULL, __WALL);
@@ -109,7 +112,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
     memcpy(&value, buf + bytes_read, addr_size);
     if (ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value) == -1)
     {
-      perror(0);
+      ERRNO_LOG("write_tracee_mem - poke 1");
       exit(1);
     }
   }
@@ -129,7 +132,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
     /* Write the adapted word */
     if (ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value) == -1)
     {
-      perror(0);
+      ERRNO_LOG("write_tracee_mem - poke 2");
       exit(1);
     }
   }
@@ -137,7 +140,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
   /* Let the debuggee continue */
   if (ptrace(PTRACE_CONT, debuggee_pid, 0, 0) == -1)
   {
-    perror(0);
+    ERRNO_LOG("write_tracee_mem - continue");
     exit(1);
   }
 }
@@ -148,21 +151,22 @@ static void init_logging(pid_t target_pid)
 {
 #ifdef ENABLE_LOGGING
   pid_t self_pid = getpid();
-  /* Write stdout and stderr for the debugger to a file */
 #ifdef __ANDROID__
 #define LOG_PREFIX "/data/" /* We have to use an absolute path to a writable directory on Android */
 #else
 #define LOG_PREFIX
 #endif
 
+  /* Create a logfile for the debugger */
   char filename[260];/* Let's live dangerously */
-  sprintf(filename, LOG_PREFIX "self_debugging_stdout.%d.%d", target_pid, self_pid);
-  freopen(filename, "w", stdout);
-  setlinebuf(stdout);
-
-  sprintf(filename, LOG_PREFIX "self_debugging_stderr.%d.%d", target_pid, self_pid);
-  freopen(filename, "w", stderr);
-  setlinebuf(stderr);
+  sprintf(filename, LOG_PREFIX "self_debugging.%d.%d", target_pid, self_pid);
+  flog = fopen(filename, "w");
+  if (flog == NULL)
+  {
+    perror(0);
+    exit(1);
+  }
+  setlinebuf(flog);
 #endif
 }
 
@@ -209,8 +213,7 @@ static void fini_debugger()
   close(mem_file_own);
 
 #ifdef ENABLE_LOGGING
-  fclose(stdout);
-  fclose(stderr);
+  fclose(flog);
 #endif
 }
 
@@ -713,7 +716,7 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   /* TODO: In principle, we need to synchronize here, make sure the debuggee is running already before we continue */
   /* Restore previous signal blocking mask */
   if (sigprocmask(SIG_SETMASK, &old_ss, NULL) == -1) {
-    perror(0);
+    ERRNO_LOG("sigprocmask restore");
     exit(1);
   }
 
@@ -733,7 +736,7 @@ static __attribute__((noreturn)) void debug_main()
   sigset_t ss, old_ss;
   sigfillset(&ss);
   if (sigprocmask(SIG_BLOCK, &ss, &old_ss) == -1) {
-    perror(0);
+    ERRNO_LOG("sigprocmask block all");
     exit(1);
   }
 
@@ -953,7 +956,7 @@ static void passthrough_signal_handler(int signal)
   /* Inject signal. Can't use PTRACE_CONT for this, its result is not guaranteed */
   if (kill(debuggee_pid, signal) == -1)
   {
-    perror(0);
+    ERRNO_LOG("kill passthrough");
     exit(1);
   }
 }
@@ -978,7 +981,7 @@ void DIABLO_Debugger_Init()
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = 0;
   if (sigaction(SIGCHLD, &sa, 0) == -1) {
-    perror(0);
+    perror("ignore sigchld");
     exit(1);
   }
 
@@ -992,7 +995,7 @@ void DIABLO_Debugger_Init()
       }
     case 0:/*child process*/
       {
-        /* Initialize logging */
+        /* Initialize logging: we can stop using perror from here on */
         init_logging(parent_pid);
 
         /* Only allow parent to ptrace */
@@ -1013,7 +1016,7 @@ void DIABLO_Debugger_Init()
         sigemptyset(&sb.sa_mask);
         sb.sa_flags = 0;
         if (sigaction(SIGTERM, &sb, 0) == -1) {
-          perror(0);
+          ERRNO_LOG("sigaction sigterm");
           exit(1);
         }
 
@@ -1042,7 +1045,7 @@ void DIABLO_Debugger_Init()
       }
   }
 
-  /* Initialize logging */
+  /* Initialize logging: we can stop using perror from here on */
   init_logging(child_pid);
 
   /* Only allow child to ptrace */
