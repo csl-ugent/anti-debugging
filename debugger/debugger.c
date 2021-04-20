@@ -107,7 +107,7 @@ void read_tracee_mem(void* buf, size_t size, uintptr_t addr)
   lseek(mem_file, addr, SEEK_SET);
   if (read(mem_file, buf, size) == -1) {
     ERRNO_LOG("read_tracee_mem");
-    exit(1);
+    close_debugger(1);
   }
 }
 
@@ -118,7 +118,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
   lseek(mem_file, addr, SEEK_SET);
   if (write(mem_file, buf, size) == -1) {
     ERRNO_LOG("write_tracee_mem");
-    exit(1);
+    close_debugger(1);
   }
 }
 #else
@@ -129,7 +129,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
   if (ptrace(PTRACE_INTERRUPT, debuggee_pid, 0, 0) == -1)
   {
     ERRNO_LOG("write_tracee_mem - interrupt");
-    exit(1);
+    close_debugger(1);
   }
   waitpid(debuggee_pid, NULL, __WALL);
 
@@ -142,7 +142,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
     if (ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value) == -1)
     {
       ERRNO_LOG("write_tracee_mem - poke 1");
-      exit(1);
+      close_debugger(1);
     }
   }
 
@@ -162,7 +162,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
     if (ptrace(PTRACE_POKEDATA, debuggee_pid, (void*)addr, (void*)value) == -1)
     {
       ERRNO_LOG("write_tracee_mem - poke 2");
-      exit(1);
+      close_debugger(1);
     }
   }
 
@@ -170,7 +170,7 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
   if (ptrace(PTRACE_CONT, debuggee_pid, 0, 0) == -1)
   {
     ERRNO_LOG("write_tracee_mem - continue");
-    exit(1);
+    close_debugger(1);
   }
 }
 #endif
@@ -720,7 +720,7 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   /* Restore previous signal blocking mask */
   if (sigprocmask(SIG_SETMASK, &old_ss, NULL) == -1) {
     ERRNO_LOG("sigprocmask restore");
-    exit(1);
+    close_debugger(1);
   }
 
   /* Do actual context switch */
@@ -740,7 +740,7 @@ static __attribute__((noreturn)) void debug_main()
   sigfillset(&ss);
   if (sigprocmask(SIG_BLOCK, &ss, &old_ss) == -1) {
     ERRNO_LOG("sigprocmask block all");
-    exit(1);
+    close_debugger(1);
   }
 
   /* Infinite loop, handling signals until the debuggee exits */
@@ -960,7 +960,7 @@ static void passthrough_signal_handler(int signal)
   if (kill(debuggee_pid, signal) == -1)
   {
     ERRNO_LOG("kill passthrough");
-    exit(1);
+    close_debugger(1);
   }
 }
 
@@ -976,7 +976,7 @@ void DIABLO_Debugger_Init()
     if (errno != EINVAL)
     {
       perror("pr_set_tracer common");
-      exit(1);
+      close_debugger(1);
     }
   }
 
@@ -1014,7 +1014,7 @@ void DIABLO_Debugger_Init()
           if (errno != EINVAL)
           {
             ERRNO_LOG("pr_set_tracer child");
-            exit(1);
+            close_debugger(1);
           }
         }
 
@@ -1025,7 +1025,7 @@ void DIABLO_Debugger_Init()
          */
         if (setpgid(0, 0) == -1) {
           ERRNO_LOG("setpgid");
-          exit(1);
+          close_debugger(1);
         }
 
         /* Install signal handler for SIGTERM. If the self-debugger receives a SIGTERM, we actually
@@ -1037,7 +1037,7 @@ void DIABLO_Debugger_Init()
         sb.sa_flags = 0;
         if (sigaction(SIGTERM, &sb, 0) == -1) {
           ERRNO_LOG("sigaction sigterm");
-          exit(1);
+          close_debugger(1);
         }
 
         /* Attach to all thread in the thread group (process) */
@@ -1080,7 +1080,7 @@ void DIABLO_Debugger_Init()
     if (errno != EINVAL)
     {
       ERRNO_LOG("pr_set_tracer parent");
-      exit(1);
+      close_debugger(1);
     }
   }
 
