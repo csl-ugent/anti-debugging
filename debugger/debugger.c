@@ -1067,6 +1067,13 @@ void DIABLO_Debugger_Init()
   /* Initialize logging: we can stop using perror from here on */
   init_logging(child_pid);
 
+  /* Install the finalization routine to be executed when the parent exits */
+  if (atexit(fini_routine) != 0) {
+    ERRNO_LOG("atexit");
+    close_debugger(1);
+  }
+  selfdebugger_pid = child_pid;
+
   /* Only allow child to ptrace */
   if (prctl(PR_SET_PTRACER, child_pid) == -1) {
     /* PR_SET_PTRACER is not supported everywhere. This is OK */
@@ -1076,10 +1083,6 @@ void DIABLO_Debugger_Init()
       exit(1);
     }
   }
-
-  /* Install the finalization routine to executed when the parent exits */
-  atexit(fini_routine);
-  selfdebugger_pid = child_pid;
 
   /* In the parent, we'll spin on this variable until the child signals we can continue */
   while (!can_run);
