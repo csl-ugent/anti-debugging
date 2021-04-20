@@ -218,13 +218,13 @@ static void fini_debugger()
 }
 
 /* Clean up and exit the debugger */
-static __attribute__((noreturn)) void close_debugger()
+static __attribute__((noreturn)) void close_debugger(int exit_code)
 {
   /* Clean up */
   fini_debugger();
 
   /* Exit this process */
-  exit(0);
+  exit(exit_code);
 }
 
 /* Some global information about the threads we are attached to. Keep an array of TID's we attached
@@ -278,7 +278,7 @@ static void removeThread(pid_t tid)
 
   /* If we're not attachd to any threads anymore, close */
   if (nr_of_threads == 0)
-   close_debugger();
+   close_debugger(0);
 }
 
 /* Attach to all thread in the thread group (process) */
@@ -404,7 +404,7 @@ static __attribute__((noreturn)) void return_to_debug_main()
 
   /* Should never get here, unless setcontext failed */
   LOG("The function setcontext failed!\n");
-  close_debugger();
+  close_debugger(1);
 }
 
 static uintptr_t decode_address_unobfuscated(struct pt_regs* regs)
@@ -647,7 +647,7 @@ static uintptr_t get_destination(pid_t debuggee_tid, unsigned int signal, struct
   }
 
   LOG("Unspecified obfuscation method: application will be forced to shut down!\n");
-  close_debugger();
+  close_debugger(1);
 }
 
 /* Do the switch to the new context, by switching to these registers */
@@ -754,7 +754,7 @@ static __attribute__((noreturn)) void debug_main()
     if (recv_tid == -1)
     {
       LOG("The debuggee has terminated (waitpid returns -1)\n");
-      close_debugger();
+      close_debugger(0);
     }
 
     LOG("Debugger entered for PID: %d\n", recv_tid);
@@ -841,7 +841,7 @@ static __attribute__((noreturn)) void debug_main()
             detachFromThreadGroup(recv_tid);
 
             /* Close the debugger */
-            close_debugger();
+            close_debugger(0);
 
             /* Let the debuggee continue its shutting down, but don't deliver signal */
             signal = 0;
@@ -1058,7 +1058,7 @@ void DIABLO_Debugger_Init()
           debug_main();
         }
 
-        close_debugger();
+        close_debugger(0);
       }
   }
 
