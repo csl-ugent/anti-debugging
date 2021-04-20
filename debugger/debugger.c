@@ -67,21 +67,25 @@ static char debug_stack[16384];
 static ucontext_t debug_loop_context;
 
 /* These static variables are used when reading memory from the debuggee */
-static int mem_file;
-static int mem_file_own;
-static FILE* flog;
+static int mem_file = -1;
+static int mem_file_own = -1;
+static FILE* flog = NULL;
 
 /* Perform finalization of debugger functionality */
 static void fini_debugger()
 {
-  LOG("Finalizing debugger functionality.\n");
+  if (flog)
+    LOG("Finalizing debugger functionality.\n");
 
   /* Close the open file descriptors */
-  close(mem_file);
-  close(mem_file_own);
+  if (mem_file != -1)
+    close(mem_file);
+  if (mem_file_own != -1)
+    close(mem_file_own);
 
 #ifdef ENABLE_LOGGING
-  fclose(flog);
+  if (flog)
+    fclose(flog);
 #endif
 }
 
