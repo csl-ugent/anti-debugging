@@ -143,13 +143,11 @@ static void write_tracee_mem(void* buf, size_t size, uintptr_t addr)
 }
 #endif
 
-/* Perform initialization for the debugger */
-static bool init_debugger(pid_t target_pid)
+/* Initialize logging */
+static void init_logging(pid_t target_pid)
 {
-  pid_t self_pid = getpid();
-  debuggee_pid = target_pid;
-
 #ifdef ENABLE_LOGGING
+  pid_t self_pid = getpid();
   /* Write stdout and stderr for the debugger to a file */
 #ifdef __ANDROID__
 #define LOG_PREFIX "/data/" /* We have to use an absolute path to a writable directory on Android */
@@ -166,6 +164,13 @@ static bool init_debugger(pid_t target_pid)
   freopen(filename, "w", stderr);
   setlinebuf(stderr);
 #endif
+}
+
+/* Perform initialization for the debugger functionality */
+static bool init_debugger(pid_t target_pid)
+{
+  pid_t self_pid = getpid();
+  debuggee_pid = target_pid;
 
   LOG("Initialize debugger. Number of entries: %zu\n", DIABLO_Debugger_nr_of_targets);
   LOG("Address of the mapping: %p\n", DIABLO_Debugger_target_map);
@@ -987,6 +992,9 @@ void DIABLO_Debugger_Init()
       }
     case 0:/*child process*/
       {
+        /* Initialize logging */
+        init_logging(parent_pid);
+
         /* Only allow parent to ptrace */
         prctl(PR_SET_PTRACER, parent_pid);
 
@@ -1033,6 +1041,9 @@ void DIABLO_Debugger_Init()
         close_debugger();
       }
   }
+
+  /* Initialize logging */
+  init_logging(child_pid);
 
   /* Only allow child to ptrace */
   prctl(PR_SET_PTRACER, child_pid);
