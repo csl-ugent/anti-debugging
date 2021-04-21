@@ -20,7 +20,7 @@
 #endif
 
 #define ERRNO_LOG(mesg) fprintf(flog, mesg " ||| errno %d: %s\n", errno, strerror(errno))
-#define LOG(mesg, ...) fprintf(flog, mesg, ##__VA_ARGS__)
+#define LOG(mesg, ...) fprintf(flog, mesg "\n", ##__VA_ARGS__)
 #else
 #define ERRNO_LOG(...)
 #define LOG(...)
@@ -75,7 +75,7 @@ static FILE* flog = NULL;
 static void fini_debugger()
 {
   if (flog)
-    LOG("Finalizing debugger functionality.\n");
+    LOG("Finalizing debugger functionality.");
 
   /* Close the open file descriptors */
   if (mem_file != -1)
@@ -208,8 +208,8 @@ static void init_debugger(pid_t target_pid)
   pid_t self_pid = getpid();
   debuggee_pid = target_pid;
 
-  LOG("Initialize debugger. Number of entries: %zu\n", DIABLO_Debugger_nr_of_targets);
-  LOG("Address of the mapping: %p\n", DIABLO_Debugger_target_map);
+  LOG("Initialize debugger. Number of entries: %zu", DIABLO_Debugger_nr_of_targets);
+  LOG("Address of the mapping: %p", DIABLO_Debugger_target_map);
 
   /* Use the PID of the debuggee to open its mem_file */
   char str[80];
@@ -364,7 +364,7 @@ static void detachFromThreadGroup(pid_t current)
       continue;/* Already stopped */
 
     /* Send a signal to stop the thread and catch it, leave the thread in stopped state before we detach it */
-    LOG("Stopping PID %d, TID %d.\n", debuggee_pid, tids[iii]);
+    LOG("Stopping PID %d, TID %d.", debuggee_pid, tids[iii]);
     my_tgkill(debuggee_pid, tids[iii], SIGSTOP);
     waitpid(tids[iii], NULL, __WALL);
   }
@@ -382,10 +382,10 @@ static void detachFromThreadGroup(pid_t current)
       my_tgkill(debuggee_pid, recv, SIGCONT);
       my_tgkill(debuggee_pid, recv, SIGCONT);
 
-      LOG("During detach received signal from new thread %d. We detached from it.\n", recv);
+      LOG("During detach received signal from new thread %d. We detached from it.", recv);
       continue;
     }
-    LOG("During detach, handled unknown signal. This is not good.\n");
+    LOG("During detach, handled unknown signal. This is not good.");
   }
 
   /* Start detaching */
@@ -394,13 +394,13 @@ static void detachFromThreadGroup(pid_t current)
     if (tids[iii] == current)
       continue;
 
-    LOG("Detaching from %d.\n", tids[iii]);
+    LOG("Detaching from %d.", tids[iii]);
     ptrace(PTRACE_DETACH, tids[iii], NULL, NULL);
 
   }
 
   /* The last thread we detach from is the one that is stuck in the finalization routine */
-  LOG("Detaching from %d.\n", current);
+  LOG("Detaching from %d.", current);
   ptrace(PTRACE_DETACH, current, NULL, NULL);
 }
 
@@ -409,7 +409,7 @@ static __attribute__((noreturn)) void return_to_debug_main()
   setcontext(&debug_loop_context);
 
   /* Should never get here, unless setcontext failed */
-  LOG("The function setcontext failed!\n");
+  LOG("The function setcontext failed!");
   close_debugger(1);
 }
 
@@ -427,7 +427,7 @@ static uintptr_t decode_address_unobfuscated(struct pt_regs* regs)
 
     if(loop.key == id)
     {
-      LOG("Found value: %"PRIxPTR" for id: %"PRIxPTR"\n", loop.value, id);
+      LOG("Found value: %"PRIxPTR" for id: %"PRIxPTR, loop.value, id);
       if (IS_MUTILATED_ADDR_MAPPING) {
         uintptr_t ret = (loop.value ^ (uintptr_t)DIABLO_Debugger_target_map);
         ret ^= MUTILATION_MASK_ADR_MAP;
@@ -596,7 +596,7 @@ static uintptr_t decode_address_segv_RW(struct pt_regs* regs, uintptr_t fault_ad
       break;
 
     default:
-      LOG("WHOOPS err #469 -- opcode %02X not implemented\n", opcode);
+      LOG("WHOOPS err #469 -- opcode %02X not implemented", opcode);
       return 0;
   }
 
@@ -639,8 +639,8 @@ static uintptr_t get_destination(pid_t debuggee_tid, unsigned int signal, struct
         ptrace(PTRACE_GETSIGINFO, debuggee_tid, NULL, &siginfo);
         uintptr_t fault_address = (uintptr_t)siginfo.si_addr;
         uintptr_t pc = regs->uregs[15];
-        LOG("fault address: %"PRIxPTR"\n", fault_address);
-        LOG("PC: %"PRIxPTR"\n", pc);
+        LOG("fault address: %"PRIxPTR, fault_address);
+        LOG("PC: %"PRIxPTR, pc);
 
         /* If the PC **is** the fault address, we lack execute permissions. Else, we lack
          * read or write permissions.
@@ -652,7 +652,7 @@ static uintptr_t get_destination(pid_t debuggee_tid, unsigned int signal, struct
       }
   }
 
-  LOG("Unspecified obfuscation method: application will be forced to shut down!\n");
+  LOG("Unspecified obfuscation method: application will be forced to shut down!");
   close_debugger(1);
 }
 
@@ -677,7 +677,7 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   /* Verify whether this is a valid fault address. If not, we return so that the signal can be passed on to the debuggee */
   if (!verify_fault_address(regs.uregs[15]))
   {
-    LOG("Fault address validation failed! Assuming this is an genuine signal...\n");
+    LOG("Fault address validation failed! Assuming this is an genuine signal...");
     return;
   }
 
@@ -688,7 +688,7 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   /* Verify whether this is a valid target. If not, we return so that the signal can be passed on to the debuggee */
   if (!verify_target_destination(destination_address))
   {
-    LOG("Target validation failed! Assuming this is an genuine signal...\n");
+    LOG("Target validation failed! Assuming this is an genuine signal...");
     return;
   }
 
@@ -702,7 +702,7 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   /* If the destination address is that of the mapping, it's a return */
   if (destination_address == (uintptr_t)DIABLO_Debugger_target_map)
   {
-      LOG("Returning!!\n");
+      LOG("Returning!!");
       destination_address = 1;
   }
 
@@ -727,13 +727,13 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   }
 
   /* Do actual context switch */
-  LOG("Going to switch to: %lx\n", regs.uregs[15]);
+  LOG("Going to switch to: %lx", regs.uregs[15]);
   do_switch(&regs);
 }
 
 static __attribute__((noreturn)) void debug_main()
 {
-  LOG("Debug loop entered\n");
+  LOG("Debug loop entered");
 
   /* Ignore all possible signals. Can't ever actually ignore SIGSTOP and SIGKILL, but can at least do the rest. Caution: Blocking
    * synchronously generated SIGBUS, SIGFPE, SIGILL, or SIGSEGV signals is undefined. Get the old set of ignored signals,
@@ -759,43 +759,43 @@ static __attribute__((noreturn)) void debug_main()
     /* If waitpid does not succeed, the process is already dead */
     if (recv_tid == -1)
     {
-      LOG("The debuggee has terminated (waitpid returns -1)\n");
+      LOG("The debuggee has terminated (waitpid returns -1)");
       close_debugger(0);
     }
 
-    LOG("Debugger entered for PID: %d\n", recv_tid);
+    LOG("Debugger entered for PID: %d", recv_tid);
 
 #ifdef ENABLE_LOGGING
     struct pt_regs regs;/* Use regs variable as pointer to member to avoid more verbose code */
     /* Get the registers. If logging is enabled, we do this now because so we can log them before potentially exiting */
     ret = ptrace(PTRACE_GETREGS, recv_tid, NULL, &regs);
     if (ret == -1)
-      LOG("PTRACE_GETREGS failed.\n");
+      LOG("PTRACE_GETREGS failed.");
     else
     {
-      LOG("Register R0: %lx\n", regs.uregs[0]);
-      LOG("Register R1: %lx\n", regs.uregs[1]);
-      LOG("Register R2: %lx\n", regs.uregs[2]);
-      LOG("Register R3: %lx\n", regs.uregs[3]);
-      LOG("Register R4: %lx\n", regs.uregs[4]);
-      LOG("Register R5: %lx\n", regs.uregs[5]);
-      LOG("Register R6: %lx\n", regs.uregs[6]);
-      LOG("Register R7: %lx\n", regs.uregs[7]);
-      LOG("Register R8: %lx\n", regs.uregs[8]);
-      LOG("Register R9: %lx\n", regs.uregs[9]);
-      LOG("Register R10: %lx\n", regs.uregs[10]);
-      LOG("Frame pointer: %lx\n", regs.uregs[11]);
-      LOG("IP link: %lx\n", regs.uregs[12]);
-      LOG("Stack pointer: %lx\n", regs.uregs[13]);
-      LOG("Link register: %lx\n", regs.uregs[14]);
-      LOG("From: %lx\n", regs.uregs[15]);
+      LOG("Register R0: %lx", regs.uregs[0]);
+      LOG("Register R1: %lx", regs.uregs[1]);
+      LOG("Register R2: %lx", regs.uregs[2]);
+      LOG("Register R3: %lx", regs.uregs[3]);
+      LOG("Register R4: %lx", regs.uregs[4]);
+      LOG("Register R5: %lx", regs.uregs[5]);
+      LOG("Register R6: %lx", regs.uregs[6]);
+      LOG("Register R7: %lx", regs.uregs[7]);
+      LOG("Register R8: %lx", regs.uregs[8]);
+      LOG("Register R9: %lx", regs.uregs[9]);
+      LOG("Register R10: %lx", regs.uregs[10]);
+      LOG("Frame pointer: %lx", regs.uregs[11]);
+      LOG("IP link: %lx", regs.uregs[12]);
+      LOG("Stack pointer: %lx", regs.uregs[13]);
+      LOG("Link register: %lx", regs.uregs[14]);
+      LOG("From: %lx", regs.uregs[15]);
     }
 #endif
 
     /* Look at the status information to decide what to do */
     if (WIFEXITED(status))
     {
-      LOG("Debuggee has terminated normally with exit status %d.\n", WEXITSTATUS(status));
+      LOG("Debuggee has terminated normally with exit status %d.", WEXITSTATUS(status));
 
       /* Remove the thread (this might close the debugger if there's no debuggees left) */
       removeThread(recv_tid);
@@ -803,7 +803,7 @@ static __attribute__((noreturn)) void debug_main()
     }
     else if (WIFSIGNALED(status))
     {
-      LOG("Debuggee has been terminated by a signal with number %d.\n", WTERMSIG(status));
+      LOG("Debuggee has been terminated by a signal with number %d.", WTERMSIG(status));
 
       /* Remove the thread (this might close the debugger if there's no debuggees left) */
       removeThread(recv_tid);
@@ -813,26 +813,26 @@ static __attribute__((noreturn)) void debug_main()
     {
       unsigned int signal = WSTOPSIG(status);
       const unsigned int event = (unsigned int) status >> 16;
-      LOG("Debuggee has been stopped by a signal with number %d and event number %u.\n", signal, event);
+      LOG("Debuggee has been stopped by a signal with number %d and event number %u.", signal, event);
       switch (event)
       {
         case PTRACE_EVENT_CLONE:
-          LOG("CLONE EVENT.\n");
+          LOG("CLONE EVENT.");
           break;
         case PTRACE_EVENT_EXEC:
-          LOG("EXEC EVENT.\n");
+          LOG("EXEC EVENT.");
           break;
         case PTRACE_EVENT_EXIT:
-          LOG("EXIT EVENT.\n");
+          LOG("EXIT EVENT.");
           break;
         case PTRACE_EVENT_FORK:
-          LOG("FORK EVENT.\n");
+          LOG("FORK EVENT.");
           break;
         case PTRACE_EVENT_STOP:
-          LOG("STOP EVENT.\n");
+          LOG("STOP EVENT.");
           break;
         case PTRACE_EVENT_VFORK:
-          LOG("VFORK EVENT.\n");
+          LOG("VFORK EVENT.");
           break;
       }
 
@@ -841,7 +841,7 @@ static __attribute__((noreturn)) void debug_main()
         /* If we receive this signal, the program has exited or the shared object has been unloaded */
         case SIGMINIDEBUGGER:
           {
-            LOG("Debuggee signals to shut down.\n");
+            LOG("Debuggee signals to shut down.");
 
             /* Detach from the thread group */
             detachFromThreadGroup(recv_tid);
@@ -862,7 +862,7 @@ static __attribute__((noreturn)) void debug_main()
           {
             if (event == PTRACE_EVENT_STOP)
             {
-              LOG("Group-stop.\n");
+              LOG("Group-stop.");
 
               ptrace(PTRACE_LISTEN, recv_tid, NULL, NULL);
               continue;
@@ -930,7 +930,7 @@ static __attribute__((noreturn)) void debug_main()
 #ifndef __ANDROID__ /* Apparently Android does not support this */
     else if (WIFCONTINUED(status))
     {
-      LOG("Debuggee has been continued by SIGCONT.\n");
+      LOG("Debuggee has been continued by SIGCONT.");
       continue;
     }
 #endif
@@ -957,7 +957,7 @@ static void fini_routine()
 
 static void passthrough_signal_handler(int signal)
 {
-  LOG("SIGNAL HANDLER: Passing through signal %d.\n", signal);
+  LOG("SIGNAL HANDLER: Passing through signal %d.", signal);
 
   /* Inject signal. Can't use PTRACE_CONT for this, its result is not guaranteed */
   if (kill(debuggee_pid, signal) == -1)
@@ -1123,8 +1123,8 @@ uintptr_t DIABLO_Debugger_Ldr(uintptr_t* base, uintptr_t offset, uint32_t flags)
 {
   uintptr_t addr = *base + ((flags & FL_DIRUP) ? offset : -offset);
   uintptr_t dest = (flags & FL_PREINDEX) ? addr : *base;
-  LOG("Base: %p, Offset: %x, flags: %u.\n", base, offset, flags);
-  LOG("Going to load something from %x.\n", dest);
+  LOG("Base: %p, Offset: %x, flags: %u.", base, offset, flags);
+  LOG("Going to load something from %x.", dest);
 
   uintptr_t value = 0;
   read_tracee_mem(&value, (flags & FL_B) ? 1 : addr_size, dest);
@@ -1132,7 +1132,7 @@ uintptr_t DIABLO_Debugger_Ldr(uintptr_t* base, uintptr_t offset, uint32_t flags)
   if ((flags & FL_WRITEBACK))
     *base = addr;
 
-  LOG("Loaded value %x.\n", value);
+  LOG("Loaded value %x.", value);
   return value;
 }
 
@@ -1140,15 +1140,15 @@ void DIABLO_Debugger_Str(uintptr_t* base, uintptr_t offset, uintptr_t value, uin
 {
   uintptr_t addr = *base + ((flags & FL_DIRUP) ? offset : -offset);
   uintptr_t dest = (flags & FL_PREINDEX) ? addr : *base;
-  LOG("Base: %p, Offset: %x, flags: %u.\n", base, offset, flags);
-  LOG("Going to store %x to %x.\n", value, dest);
+  LOG("Base: %p, Offset: %x, flags: %u.", base, offset, flags);
+  LOG("Going to store %x to %x.", value, dest);
 
   write_tracee_mem(&value, (flags & FL_B) ? 1 : addr_size, dest);
 
   if(flags & FL_WRITEBACK)
     *base = addr;
 
-  LOG("Store successful.\n");
+  LOG("Store successful.");
 }
 
 void DIABLO_Debugger_Ldm(uintptr_t addr, void* regs, size_t nr_of_regs)
