@@ -50,6 +50,8 @@
 ///////////////////////////////////////////////////////
 static const bool IS_MUTILATED_ADDR_MAPPING = true;
 static const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
+static const unsigned int MIN_KERNEL_RANGE = 0xC0000000;
+static const unsigned int MAX_KERNEL_RANGE = 0xFFFFFFFF;
 
 /* The size of an address */
 static size_t addr_size = sizeof(void*);
@@ -515,7 +517,7 @@ static uintptr_t decode_address_fpe(struct pt_regs* regs)
   //we have to find *to*, the destination address which is encoded into the ill_addr.
   uintptr_t ill_addr_encoded = regs->uregs[regN];
 
-  return ill_addr_encoded ^ 0xffffffff ^ pc;
+  return ill_addr_encoded ^ MAX_KERNEL_RANGE ^ pc;
 }
 
 static uintptr_t decode_address_segv_RW(struct pt_regs* regs, uintptr_t fault_address)
@@ -537,7 +539,7 @@ static uintptr_t decode_address_segv_RW(struct pt_regs* regs, uintptr_t fault_ad
 
   int immed = 255;
   unsigned int opcode = (pcins & 0xFFF00000) >> 20;
-  unsigned int MASK = 0xffffffff;
+  unsigned int MASK = MAX_KERNEL_RANGE;
   switch (opcode) {
 
     case 0xE58: // STR
@@ -605,7 +607,7 @@ static uintptr_t decode_address_segv_RW(struct pt_regs* regs, uintptr_t fault_ad
 
 static uintptr_t decode_address_segv_X(struct pt_regs* regs, uintptr_t fault_address)
 {
-  uint32_t MASK = 0xC0000000;
+  uint32_t MASK = MIN_KERNEL_RANGE;
   /*  we use 0xC0000000 instead of 0xFFFFFFFF
       simply because eg: 0xFFFFFFFF - 0x800C = 0xFFFF7FF3
       when the branch happens, the kernel/CPU will correct it
