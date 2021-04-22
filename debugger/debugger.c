@@ -51,7 +51,7 @@
 static const bool IS_MUTILATED_ADDR_MAPPING = true;
 static const unsigned int MUTILATION_MASK_ADR_MAP = 0xF0F0F0F0;
 static const unsigned int MIN_KERNEL_RANGE = 0xC0000000;
-static const unsigned int MAX_KERNEL_RANGE = 0xFFFFFFFF;
+static const unsigned int MAX_KERNEL_RANGE = 0xEFFFFFF0;
 
 /* The size of an address */
 static size_t addr_size = sizeof(void*);
