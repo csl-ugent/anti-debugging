@@ -735,7 +735,7 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
 
 static __attribute__((noreturn)) void debug_main()
 {
-  LOG("Debug loop entered");
+  LOG("\nDebug loop entered");
 
   /* Ignore all possible signals. Can't ever actually ignore SIGSTOP and SIGKILL, but can at least do the rest. Caution: Blocking
    * synchronously generated SIGBUS, SIGFPE, SIGILL, or SIGSEGV signals is undefined. Get the old set of ignored signals,
