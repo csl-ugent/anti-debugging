@@ -729,7 +729,7 @@ static void handle_switch(pid_t debuggee_tid, unsigned int signal, sigset_t old_
   }
 
   /* Do actual context switch */
-  LOG("Going to switch to: %lx", regs.uregs[15]);
+  LOG("Going to switch to: 0x%lx", regs.uregs[15]);
   do_switch(&regs);
 }
 
@@ -775,22 +775,22 @@ static __attribute__((noreturn)) void debug_main()
       LOG("PTRACE_GETREGS failed.");
     else
     {
-      LOG("Register R0: %lx", regs.uregs[0]);
-      LOG("Register R1: %lx", regs.uregs[1]);
-      LOG("Register R2: %lx", regs.uregs[2]);
-      LOG("Register R3: %lx", regs.uregs[3]);
-      LOG("Register R4: %lx", regs.uregs[4]);
-      LOG("Register R5: %lx", regs.uregs[5]);
-      LOG("Register R6: %lx", regs.uregs[6]);
-      LOG("Register R7: %lx", regs.uregs[7]);
-      LOG("Register R8: %lx", regs.uregs[8]);
-      LOG("Register R9: %lx", regs.uregs[9]);
-      LOG("Register R10: %lx", regs.uregs[10]);
-      LOG("Frame pointer: %lx", regs.uregs[11]);
-      LOG("IP link: %lx", regs.uregs[12]);
-      LOG("Stack pointer: %lx", regs.uregs[13]);
-      LOG("Link register: %lx", regs.uregs[14]);
-      LOG("From: %lx", regs.uregs[15]);
+      LOG("Register R0: 0x%lx", regs.uregs[0]);
+      LOG("Register R1: 0x%lx", regs.uregs[1]);
+      LOG("Register R2: 0x%lx", regs.uregs[2]);
+      LOG("Register R3: 0x%lx", regs.uregs[3]);
+      LOG("Register R4: 0x%lx", regs.uregs[4]);
+      LOG("Register R5: 0x%lx", regs.uregs[5]);
+      LOG("Register R6: 0x%lx", regs.uregs[6]);
+      LOG("Register R7: 0x%lx", regs.uregs[7]);
+      LOG("Register R8: 0x%lx", regs.uregs[8]);
+      LOG("Register R9: 0x%lx", regs.uregs[9]);
+      LOG("Register R10: 0x%lx", regs.uregs[10]);
+      LOG("Frame pointer: 0x%lx", regs.uregs[11]);
+      LOG("IP link: 0x%lx", regs.uregs[12]);
+      LOG("Stack pointer: 0x%lx", regs.uregs[13]);
+      LOG("Link register: 0x%lx", regs.uregs[14]);
+      LOG("From: 0x%lx", regs.uregs[15]);
     }
 #endif
 
@@ -1125,8 +1125,8 @@ uintptr_t DIABLO_Debugger_Ldr(uintptr_t* base, uintptr_t offset, uint32_t flags)
 {
   uintptr_t addr = *base + ((flags & FL_DIRUP) ? offset : -offset);
   uintptr_t dest = (flags & FL_PREINDEX) ? addr : *base;
-  LOG("Base: %p, Offset: %x, flags: %u.", base, offset, flags);
-  LOG("Going to load something from %x.", dest);
+  LOG("Base: %p, Offset: 0x%x, flags: %u.", base, offset, flags);
+  LOG("Going to load something from 0x%x.", dest);
 
   uintptr_t value = 0;
   read_tracee_mem(&value, (flags & FL_B) ? 1 : addr_size, dest);
@@ -1134,7 +1134,7 @@ uintptr_t DIABLO_Debugger_Ldr(uintptr_t* base, uintptr_t offset, uint32_t flags)
   if ((flags & FL_WRITEBACK))
     *base = addr;
 
-  LOG("Loaded value %x.", value);
+  LOG("Loaded value 0x%x.", value);
   return value;
 }
 
@@ -1142,8 +1142,8 @@ void DIABLO_Debugger_Str(uintptr_t* base, uintptr_t offset, uintptr_t value, uin
 {
   uintptr_t addr = *base + ((flags & FL_DIRUP) ? offset : -offset);
   uintptr_t dest = (flags & FL_PREINDEX) ? addr : *base;
-  LOG("Base: %p, Offset: %x, flags: %u.", base, offset, flags);
-  LOG("Going to store %x to %x.", value, dest);
+  LOG("Base: %p, Offset: 0x%x, flags: %u.", base, offset, flags);
+  LOG("Going to store 0x%x to 0x%x.", value, dest);
 
   write_tracee_mem(&value, (flags & FL_B) ? 1 : addr_size, dest);
 
