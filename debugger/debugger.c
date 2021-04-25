@@ -16,15 +16,15 @@
 #include <android/log.h>
 #define ANDROID_LOG(mesg, ...) __android_log_print(ANDROID_LOG_INFO, "MINIDEBUGGER", mesg, ##__VA_ARGS__)
 #else
-#define ANDROID_LOG(...)
+#define ANDROID_LOG(...) do {} while(0)
 #endif
 
 #define ERRNO_LOG(mesg) fprintf(flog, mesg " ||| errno %d: %s\n", errno, strerror(errno))
 #define LOG(mesg, ...) fprintf(flog, mesg "\n", ##__VA_ARGS__)
 #else
-#define ERRNO_LOG(...)
-#define LOG(...)
-#define ANDROID_LOG(...)
+#define ERRNO_LOG(...) do {} while(0)
+#define LOG(...) do {} while(0)
+#define ANDROID_LOG(...) do {} while(0)
 #endif
 
 /* Own version of tgkill */
@@ -751,7 +751,7 @@ static __attribute__((noreturn)) void debug_main()
   /* Infinite loop, handling signals until the debuggee exits */
   while(true)
   {
-    int status, ret;
+    int status;
 
     /* Wait for a signal from the debuggee. This is either the self-debugger, in which case we explicitly use its PID, or any of the
      * application's threads, in which case we wait for all PIDs (-1). Not sure if the __WALL is required though.
@@ -770,8 +770,7 @@ static __attribute__((noreturn)) void debug_main()
 #ifdef ENABLE_LOGGING
     struct pt_regs regs;/* Use regs variable as pointer to member to avoid more verbose code */
     /* Get the registers. If logging is enabled, we do this now because so we can log them before potentially exiting */
-    ret = ptrace(PTRACE_GETREGS, recv_tid, NULL, &regs);
-    if (ret == -1)
+    if (ptrace(PTRACE_GETREGS, recv_tid, NULL, &regs) == -1)
       LOG("PTRACE_GETREGS failed.");
     else
     {
