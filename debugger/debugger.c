@@ -57,10 +57,12 @@ static const unsigned int MAX_KERNEL_RANGE = 0xEFFFFFF0;
 static size_t addr_size = sizeof(void*);
 
 /* These variables will be filled in by Diablo */
+#pragma GCC visibility push(hidden)
 t_target_map_entry DIABLO_Debugger_target_map[42] __attribute__((section (".data.target_map"))) = {{ sizeof(DIABLO_Debugger_target_map[0]), 0 }};
 size_t DIABLO_Debugger_nr_of_targets = 42;
 ptrdiff_t DIABLO_Debugger_fault_map[42] __attribute__((section (".data.fault_map"))) = { sizeof(DIABLO_Debugger_fault_map[0]) };
 size_t DIABLO_Debugger_nr_of_faults = 42;
+#pragma GCC visibility pop
 
 /* These global variables should be made TLS if we want multithreading support */
 static pid_t selfdebugger_pid;/* The PID of the self-debugger process */
